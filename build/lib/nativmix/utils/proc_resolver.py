@@ -58,6 +58,7 @@ _USER_DATA_DIR_MAP: dict[str, str] = {
     "element":           "Element",
     "signal":            "Signal",
     "zoom":              "Zoom",
+    "vesktop":           "Vesktop",
 }
 
 #: Maps --app-id values (Electron) to human-readable names.
@@ -97,6 +98,7 @@ _FLATPAK_APP_MAP: dict[str, str] = {
     "org.gnome.rhythmbox":           "Rhythmbox",
     "io.bassi.amberol":              "Amberol",
     "com.spotify.spotify":           "Spotify",   # alternative bundle ID
+    "dev.vencord.vesktop":           "Vesktop",
 }
 
 #: Maps known binary basenames directly to human-readable names.
@@ -144,6 +146,48 @@ def _read_cmdline(pid: int) -> list[str] | None:
         return data.rstrip(b"\x00").split(b"\x00")
     except OSError:
         return None
+
+
+def _read_environ(pid: int) -> dict[str, str]:
+    """
+    Read /proc/<pid>/environ and return it as a dictionary.
+    """
+    try:
+        data = Path(f"/proc/{pid}/environ").read_bytes()
+        env_vars = {}
+        for item in data.split(b"\x00"):
+            if item:
+                try:
+                    k, v = item.decode("utf-8", errors="replace").split("=", 1)
+                    env_vars[k] = v
+                except ValueError:
+                    pass
+        return env_vars
+    except OSError:
+        return {}
+
+
+def _check_fd_for_path(pid: int, target_substring: str) -> bool:
+    """
+    Check if the process has any open file descriptors pointing to a path
+    containing the target_substring.
+    """
+    fd_dir = Path(f"/proc/{pid}/fd")
+    if not fd_dir.exists() or not fd_dir.is_dir():
+        return False
+        
+    try:
+        for fd in fd_dir.iterdir():
+            try:
+                target = os.readlink(fd)
+                if target_substring in target.lower():
+                    return True
+            except OSError:
+                continue
+    except OSError:
+        pass
+        
+    return False
 
 
 def _read_status_field(pid: int, field: str) -> str | None:
@@ -301,6 +345,25 @@ def _resolve_pid(pid: int) -> str | None:
     args = [a.decode("utf-8", errors="replace") for a in args_bytes if a]
     if not args:
         return None
+
+    env = _read_environ(pid)
+
+    # Vencord/Vesktop usually set generic names but their config path gives them away.
+    # Check if this process uses a vesktop config path via env
+    xdg_config = env.get("XDG_CONFIG_HOME", "")
+    home = env.get("HOME", "")
+    
+    # 0. Deep Path Inspection for Vesktop
+    if "vesktop" in xdg_config.lower() or (home and os.path.isdir(os.path.join(home, ".config", "vesktop"))):
+        # We need to make sure this is actually the vesktop process and not just some user shell.
+        # Check command line for electron/chrome/chromium and vesktop markers.
+        cmd_str = " ".join(args).lower()
+        if "vesktop" in cmd_str or "electron" in args[0].lower() or "chrome" in args[0].lower() or "chromium" in args[0].lower():
+             if "vesktop" in cmd_str or "vesktop" in env.get("PWD", "").lower() or (home and Path(home, ".config", "vesktop").exists()):
+                  # To be totally sure it's Vesktop and not just a generic Chrome instance while the Vesktop config exists,
+                  # we look for Vesktop specifically in the executed binary path or `--app-path` or standard Electron paths.
+                  if "vesktop" in cmd_str or _check_fd_for_path(pid, ".config/vesktop") or _check_fd_for_path(pid, "/opt/vesktop"):
+                      return "Vesktop"
 
     binary = os.path.basename(args[0]).lower()
 

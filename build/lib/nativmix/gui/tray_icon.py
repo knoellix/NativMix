@@ -18,6 +18,8 @@ from PyQt6.QtCore import QObject
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from nativmix.utils.paths import get_icon_path
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,8 +36,11 @@ class TrayIcon(QSystemTrayIcon):
     """
 
     def __init__(self, main_window, parent: QObject | None = None) -> None:
-        # Try to load the installed icon; fall back to the built-in "audio" theme icon
-        icon = QIcon.fromTheme("nativmix", QIcon.fromTheme("audio-volume-high"))
+        icon_path = get_icon_path()
+        if icon_path:
+            icon = QIcon(str(icon_path))
+        else:
+            icon = QIcon.fromTheme("nativmix", QIcon.fromTheme("audio-volume-high"))
         super().__init__(icon, parent)
 
         self._window = main_window

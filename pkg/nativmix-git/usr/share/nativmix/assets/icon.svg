@@ -1,0 +1,14 @@
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <!-- Grauer Kreis -->
+  <circle cx="64" cy="64" r="60" fill="#8c8c8c" />
+  
+  <!-- Dunkle Faderspuren -->
+  <rect x="34" y="28" width="8" height="72" rx="4" fill="#282828" />
+  <rect x="60" y="28" width="8" height="72" rx="4" fill="#282828" />
+  <rect x="86" y="28" width="8" height="72" rx="4" fill="#282828" />
+  
+  <!-- Helle Fader-Knöpfe -->
+  <rect x="24" y="38" width="28" height="16" rx="4" fill="#dcdcdc" />
+  <rect x="50" y="62" width="28" height="16" rx="4" fill="#dcdcdc" />
+  <rect x="76" y="48" width="28" height="16" rx="4" fill="#dcdcdc" />
+</svg>

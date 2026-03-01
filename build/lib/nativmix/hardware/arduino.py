@@ -183,6 +183,8 @@ class ArduinoThread(QThread):
         self._running: bool = False
         self._reconnect_requested: bool = False
         self._connected_port: str | None = None  # last successfully connected port
+        self._failed_attempts: int = 0
+        self._error_notified: bool = False
 
         # Normalize inversion flags to exactly num_channels entries.
         # Pad with False or trim silently – avoids a crash when the config
@@ -270,6 +272,7 @@ class ArduinoThread(QThread):
 
             if port is None:
                 # No Arduino found – log once and retry after interval
+                self._handle_connection_failure()
                 logger.debug("No Arduino found, retrying in %.1fs …", RECONNECT_INTERVAL)
                 self._wait_or_stop(RECONNECT_INTERVAL)
                 continue
@@ -281,6 +284,17 @@ class ArduinoThread(QThread):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _handle_connection_failure(self) -> None:
+        self._failed_attempts += 1
+        if self._failed_attempts >= 6 and not self._error_notified:
+            import os
+            os.system("notify-send 'NativMix' 'Arduino not found. NativMix will continue to search for the device in the background.'")
+            self._error_notified = True
+
+    def _handle_connection_success(self) -> None:
+        self._failed_attempts = 0
+        self._error_notified = False
 
     def _resolve_port(self) -> str | None:
         """
@@ -327,6 +341,7 @@ class ArduinoThread(QThread):
             with serial.Serial(port, baudrate=BAUD_RATE, timeout=READ_TIMEOUT) as ser:
                 logger.info("Arduino connected on %s", port)
                 self._connected_port = port
+                self._handle_connection_success()
                 self.connection_changed.emit(True)
 
                 # Flush any stale bytes left in the buffer
@@ -343,6 +358,7 @@ class ArduinoThread(QThread):
         except serial.SerialException as exc:
             # Device disconnected or unavailable – start reconnect loop
             logger.warning("Serial error on %s: %s", port, exc)
+            self._handle_connection_failure()
             self.connection_changed.emit(False)
             # Brief pause so we don't spin-lock if the device keeps failing
             self._wait_or_stop(RECONNECT_INTERVAL)
@@ -350,6 +366,7 @@ class ArduinoThread(QThread):
         except OSError as exc:
             # Covers permission errors, missing device nodes, etc.
             logger.error("OS error on %s: %s", port, exc)
+            self._handle_connection_failure()
             self.error_occurred.emit(str(exc))
             self.connection_changed.emit(False)
             self._wait_or_stop(RECONNECT_INTERVAL)

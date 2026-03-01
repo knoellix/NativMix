@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nativmix"
-version = "0.1.0"
+version = "1.0.0"
 description = "A hardware-assisted volume mixer for PipeWire/PulseAudio with Arduino support"
 readme = "README.md"
 license = { text = "GPL-3.0-or-later" }
