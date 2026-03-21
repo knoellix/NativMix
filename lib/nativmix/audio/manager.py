@@ -35,12 +35,15 @@ Or using a venv:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+import select
+import subprocess
+import sys
 import threading
 import time
 from dataclasses import dataclass
-import subprocess
 from typing import Any
 
 import pulsectl
@@ -197,8 +200,13 @@ class _AudioListenerThread(QThread):
                         pulse.event_listen(timeout=0.1)
                     except pulsectl.PulseLoopStop:
                         break
+                    except pulsectl.PulseError as e:
+                        # PulseDisconnected and other fatal errors have empty messages.
+                        # Break out so _on_thread_finished() can schedule a restart.
+                        logger.warning("PulseAudio error in event_listen — reconnecting: %s", e or type(e).__name__)
+                        raise
                     except Exception as e:
-                        logger.error("Error in pulse event_listen: %s", e)
+                        logger.error("Unexpected error in pulse event_listen: %s", e)
                         time.sleep(0.1)
 
             logger.info("AudioListenerThread finished cleanly")
@@ -456,6 +464,155 @@ class _AudioListenerThread(QThread):
         )
 
 
+class PeakMonitorThread(QThread):
+    """
+    Emits per-channel audio peak levels for the VU meter bars.
+
+    Strategy
+    --------
+    V-Sink channels  → real audio peaks via an isolated subprocess running
+                       pulsectl.get_peak_sample() on the NativMix monitor
+                       source.  If pulsectl SIGSEGVs in the subprocess, only
+                       that child process dies; the main app is unaffected.
+                       After _MAX_CRASHES consecutive subprocess deaths the
+                       thread falls back permanently to the volume proxy.
+
+    App channels     → volume proxy (max fader volume of assigned streams).
+                       Per-stream peak detection requires stream_index which
+                       triggers a known PipeWire crash; skip for now.
+
+    Other channels   → 0.0 (hardware-mode, no apps assigned, etc.)
+    """
+
+    peaks_updated = pyqtSignal(list)  # list[float], one per channel
+
+    _MAX_CRASHES = 3
+
+    def __init__(self, config: "ConfigManager", active_streams_fn, parent=None) -> None:
+        super().__init__(parent)
+        self._config = config
+        self._get_active_streams = active_streams_fn
+        self._running = False
+        self._crash_count = 0
+
+    # ── QThread entry point ───────────────────────────────────────────
+
+    def run(self) -> None:
+        self._running = True
+        sources = self._build_sources()
+        has_vsink = any(s is not None for s in sources)
+
+        if has_vsink and self._crash_count < self._MAX_CRASHES:
+            try:
+                self._run_subprocess_loop(sources)
+            except Exception as exc:
+                self._crash_count += 1
+                logger.warning(
+                    "PeakMonitorThread: peak worker exited (%d/%d): %s",
+                    self._crash_count, self._MAX_CRASHES, exc,
+                )
+
+        # Fall back to proxy (either no V-sinks or subprocess kept crashing)
+        self._run_proxy_loop()
+
+    def stop(self) -> None:
+        self._running = False
+        if not self.wait(1000):
+            self.terminate()
+            self.wait(500)
+
+    # ── Subprocess mode (real peaks for V-sink channels) ─────────────
+
+    def _build_sources(self) -> list:
+        """Return a list of source names (or None) indexed by channel."""
+        sources = []
+        for ch in range(self._config.num_channels):
+            if self._config.is_v_sink_enabled(ch):
+                sources.append(f"NativMix_CH_{ch}.monitor")
+            else:
+                sources.append(None)
+        return sources
+
+    def _run_subprocess_loop(self, sources: list) -> None:
+        """Spawn peak_worker subprocess and relay its peaks until stopped or crash."""
+        cmd = [sys.executable, "-m", "nativmix.audio.peak_worker"]
+        proc = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        try:
+            proc.stdin.write(json.dumps({"sources": sources}) + "\n")
+            proc.stdin.flush()
+            proc.stdin.close()
+
+            while self._running:
+                if proc.poll() is not None:
+                    raise RuntimeError(
+                        f"peak_worker exited with code {proc.returncode}"
+                    )
+                # Non-blocking read — wait up to 0.5 s so we can check _running
+                ready = select.select([proc.stdout], [], [], 0.5)
+                if not ready[0]:
+                    continue
+                line = proc.stdout.readline()
+                if not line:
+                    raise RuntimeError("peak_worker stdout closed unexpectedly")
+                try:
+                    raw_levels: list[float] = json.loads(line.strip())
+                except (json.JSONDecodeError, ValueError):
+                    continue
+
+                # Merge: subprocess provides V-sink peaks; proxy fills the rest
+                streams = self._get_active_streams()
+                levels = []
+                for ch, src in enumerate(sources):
+                    if src is not None and ch < len(raw_levels):
+                        levels.append(max(0.0, min(1.0, raw_levels[ch])))
+                    else:
+                        levels.append(self._proxy_level(streams, ch))
+                self.peaks_updated.emit(levels)
+        finally:
+            try:
+                proc.terminate()
+                proc.wait(timeout=2)
+            except Exception:
+                pass
+
+    # ── Proxy mode (volume as level indicator) ────────────────────────
+
+    def _run_proxy_loop(self) -> None:
+        while self._running:
+            try:
+                streams = self._get_active_streams()
+                levels = [
+                    self._proxy_level(streams, ch)
+                    for ch in range(self._config.num_channels)
+                ]
+            except Exception:
+                logger.debug("PeakMonitorThread: proxy error", exc_info=True)
+                levels = [0.0] * self._config.num_channels
+            self.peaks_updated.emit(levels)
+            time.sleep(0.083)  # ~12 fps — smooth enough, half the repaint load vs 20 fps
+
+    def _proxy_level(self, streams: list, ch_idx: int) -> float:
+        """Return volume-proxy level for one channel [0.0–1.0]."""
+        if self._config.is_v_sink_enabled(ch_idx):
+            return float(self._config.get_channel_volume(ch_idx))
+
+        app_names = {n.lower() for n in self._config.get_app_names(ch_idx)}
+        if not app_names:
+            return 0.0
+
+        volumes = [
+            s.volume for s in streams
+            if s.app_name.lower() in app_names and not s.muted
+        ]
+        return max(volumes) if volumes else 0.0
+
+
 class PipeWireManager(AudioBackendBase):
     """
     Linux audio backend using pulsectl to control PipeWire/PulseAudio.
@@ -507,6 +664,12 @@ class PipeWireManager(AudioBackendBase):
         # updates are suppressed for these channels until creation completes
         # to prevent stray writes hitting the system sink instead of the V-Sink.
         self._vsink_creating: set[int] = set()
+        # VU Meter peak monitor thread
+        self.peak_monitor = PeakMonitorThread(
+            config=self._config,
+            active_streams_fn=lambda: list(self._active_streams.values()),
+        )
+        self.peak_monitor.peaks_updated.connect(self.peaks_updated)
 
     # ------------------------------------------------------------------
     # Public stream access (for GUI)
@@ -757,6 +920,8 @@ class PipeWireManager(AudioBackendBase):
     def stop(self) -> None:
         """Stop the listener thread gracefully."""
         self._running = False
+        if self.peak_monitor.isRunning():
+            self.peak_monitor.stop()
         if self._thread is not None:
             # Disconnect first so no signals fire during or after stop().
             self._unwire_thread_signals(self._thread)

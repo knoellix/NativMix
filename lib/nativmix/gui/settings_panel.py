@@ -369,7 +369,16 @@ class SettingsPanel(QGroupBox):
             self._show_invert_cb.setChecked(self._config.show_invert_option)
             self._show_invert_cb.toggled.connect(self._on_show_invert_toggled)
             bottom_layout.addWidget(self._show_invert_cb)
-            
+
+            self._vu_meter_cb = QCheckBox("VU Meter (experimental)")
+            self._vu_meter_cb.setToolTip(
+                "Show real-time audio level bars next to each fader. "
+                "Experimental — disable if you notice performance issues."
+            )
+            self._vu_meter_cb.setChecked(self._config.vu_meter_enabled)
+            self._vu_meter_cb.toggled.connect(self._on_vu_meter_toggled)
+            bottom_layout.addWidget(self._vu_meter_cb)
+
             bottom_layout.addStretch()
             
             root_layout.addLayout(bottom_layout)
@@ -680,6 +689,12 @@ class SettingsPanel(QGroupBox):
         self._config.show_invert_option = checked
         self._config.save()
         logger.debug("Show Invert Option toggled: %s", checked)
+
+    @pyqtSlot(bool)
+    def _on_vu_meter_toggled(self, checked: bool) -> None:
+        self._config.vu_meter_enabled = checked
+        self._config.save()
+        logger.debug("VU Meter toggled: %s", checked)
 
     @pyqtSlot(int)
     def _on_curve_changed(self, slider_value: int) -> None:

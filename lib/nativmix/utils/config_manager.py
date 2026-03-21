@@ -64,7 +64,7 @@ def _default_settings(num_channels: int = 5) -> dict[str, Any]:
         # Per-channel V-Sink flags - enables virtual sinks for Pro-Routing
         "v_sink_map": [False] * num_channels,
         # GUI: Transparency translucent background toggle
-        "transparency": True,
+        "transparency": False,
         # GUI: Show 'Invert' checkbox in main mixer channels
         "show_invert_option": False,
         # GUI: Stay open on close (true = quit, false = hide to tray)
@@ -238,7 +238,7 @@ class ConfigManager(QObject):
         while len(vs) < num_ch:
             vs.append(False)
             
-        self._data["settings"].setdefault("transparency", True)
+        self._data["settings"].setdefault("transparency", False)
         self._data["settings"].setdefault("show_invert_option", False)
         
         # v3 → v4: add debug_logging
@@ -451,7 +451,7 @@ class ConfigManager(QObject):
     @property
     def transparency(self) -> bool:
         """Enable KDE/Wayland translucent window background."""
-        return bool(self._data.get("settings", {}).get("transparency", True))
+        return bool(self._data.get("settings", {}).get("transparency", False))
 
     @transparency.setter
     def transparency(self, value: bool) -> None:
@@ -466,6 +466,16 @@ class ConfigManager(QObject):
     @show_invert_option.setter
     def show_invert_option(self, value: bool) -> None:
         self._data.setdefault("settings", {})["show_invert_option"] = bool(value)
+        self.settings_changed.emit()
+
+    @property
+    def vu_meter_enabled(self) -> bool:
+        """Show real-time VU level bars next to each fader."""
+        return bool(self._data.get("settings", {}).get("vu_meter_enabled", False))
+
+    @vu_meter_enabled.setter
+    def vu_meter_enabled(self, value: bool) -> None:
+        self._data.setdefault("settings", {})["vu_meter_enabled"] = bool(value)
         self.settings_changed.emit()
 
     @property

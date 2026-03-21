@@ -23,6 +23,7 @@ from __future__ import annotations
 import functools
 import logging
 import os
+import time
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, pyqtSlot, QEvent, QSettings
@@ -40,6 +41,8 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSlider,
+    QStyle,
+    QStyleOptionSlider,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -175,6 +178,114 @@ class _AppRow(QWidget):
 
 
 # ---------------------------------------------------------------------------
+# VU Slider — native QSlider + lightweight transparent overlay for animation
+# ---------------------------------------------------------------------------
+
+class _VuOverlay(QWidget):
+    """
+    Transparent child widget painted on top of _VuSlider.
+
+    Separating VU animation from the native slider is the key performance fix:
+    the expensive Kvantum/Breeze style render in QSlider.paintEvent() only
+    fires when the fader VALUE changes.  The overlay repaints independently
+    (only 2 fillRect calls per frame) so VU animation never triggers a full
+    native style re-render.
+    """
+
+    _DECAY     = 0.82   # per-frame (~175 ms half-life at 12 fps)
+    _PEAK_HOLD = 1.2
+    _PEAK_FALL = 0.88
+    _GAMMA     = 0.45   # perceptual power curve: raw=0.5 → 0.76 visible
+
+    def __init__(self, parent: "QSlider") -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._level  = 0.0
+        self._peak   = 0.0
+        self._peak_t = 0.0
+
+    def set_level(self, raw: float) -> None:
+        scaled = raw ** _VuOverlay._GAMMA if raw > 0.0 else 0.0
+        new_level = max(scaled, self._level * _VuOverlay._DECAY)
+
+        now = time.monotonic()
+        if scaled >= self._peak:
+            new_peak, new_peak_t = scaled, now
+        elif now - self._peak_t > _VuOverlay._PEAK_HOLD:
+            new_peak, new_peak_t = self._peak * _VuOverlay._PEAK_FALL, self._peak_t
+        else:
+            new_peak, new_peak_t = self._peak, self._peak_t
+
+        # Only queue a repaint when the change is visually meaningful (≥ 0.5 % bar)
+        if abs(new_level - self._level) > 0.005 or abs(new_peak - self._peak) > 0.005:
+            self._level  = new_level
+            self._peak   = new_peak
+            self._peak_t = new_peak_t
+            self.update()
+        else:
+            self._level  = new_level
+            self._peak   = new_peak
+            self._peak_t = new_peak_t
+
+    def paintEvent(self, event) -> None:
+        if self._level < 0.01 and self._peak < 0.01:
+            return
+
+        slider = self.parent()
+        opt = QStyleOptionSlider()
+        slider.initStyleOption(opt)
+        groove = slider.style().subControlRect(
+            QStyle.ComplexControl.CC_Slider, opt,
+            QStyle.SubControl.SC_SliderGroove, slider,
+        )
+        if not groove.isValid() or groove.height() < 2:
+            return
+
+        gx, gy, gw, gh = groove.x(), groove.y(), groove.width(), groove.height()
+        accent = slider.palette().color(QPalette.ColorRole.Highlight)
+
+        p = QPainter(self)
+
+        vu_h = int(gh * self._level)
+        if vu_h > 0:
+            c = QColor(accent.lighter(140))
+            c.setAlpha(110)
+            p.fillRect(gx, gy + gh - vu_h, gw, vu_h, c)
+
+        if self._peak > 0.01:
+            pk_y = gy + gh - int(gh * self._peak) - 1
+            c = QColor(accent.lighter(180))
+            c.setAlpha(220)
+            p.fillRect(gx, max(gy, pk_y), gw, 2, c)
+
+        p.end()
+
+
+class _VuSlider(QSlider):
+    """Vertical QSlider with a _VuOverlay child for non-invasive VU animation."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(Qt.Orientation.Vertical, parent)
+        self.setRange(0, 100)
+        self.setFixedHeight(180)
+        self._overlay = _VuOverlay(self)
+        self._overlay.setGeometry(self.rect())
+
+    def initStyleOption(self, option) -> None:
+        super().initStyleOption(option)
+        option.state |= QStyle.StateFlag.State_Active
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._overlay.setGeometry(self.rect())
+
+    def set_level(self, raw: float) -> None:
+        self._overlay.set_level(raw)
+
+
+# ---------------------------------------------------------------------------
 # Per-channel column
 # ---------------------------------------------------------------------------
 
@@ -225,13 +336,9 @@ class ChannelWidget(QFrame):
         
         # Reduced opacity applied later during update_accent_colors
 
-        # ── Slider ─────────────────────────────────────────────────────
-        self._slider = QSlider(Qt.Orientation.Vertical)
-        self._slider.setRange(0, 100)
-        
-        # Initial volume sync from config
+        # ── Slider (integrated VU fader) ───────────────────────────────
+        self._slider = _VuSlider()
         init_vol = self._config.get_channel_volume(self._ch)
-        self._slider.setFixedHeight(180)
         self._slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self._slider.valueChanged.connect(self._on_slider_changed)
         
@@ -427,6 +534,10 @@ class ChannelWidget(QFrame):
         self._level_label.setText(f"{pct} %")
         self._slider.blockSignals(False)
 
+    def set_peak(self, level: float) -> None:
+        """Update the integrated VU wave with a new level [0.0–1.0]."""
+        self._slider.set_level(level)
+
     @pyqtSlot(int, int)
     def handle_midi_input(self, cc: int, value: int) -> None:
         """Slot for direct connection from MidiThread.midi_cc_received."""
@@ -475,46 +586,10 @@ class ChannelWidget(QFrame):
         for role in (QPalette.ColorRole.Highlight, QPalette.ColorRole.HighlightedText, QPalette.ColorRole.WindowText, QPalette.ColorRole.Button):
             palette.setColor(QPalette.ColorGroup.Inactive, role, palette.color(QPalette.ColorGroup.Active, role))
         
+        # _VuSlider reads palette directly in paintEvent — just push the updated palette
         self._slider.setPalette(palette)
-        
-        accent_hex = palette.color(QPalette.ColorRole.Highlight).name()
-        # Use Button instead of Dark because Dark is not parsed by our KDE theme parser, 
-        # causing it to stay stuck on the previous theme's color!
-        bg_hex = palette.color(QPalette.ColorRole.Button).name()
-        text_color = palette.color(QPalette.ColorRole.WindowText)
-        border_hex = f"rgba({text_color.red()}, {text_color.green()}, {text_color.blue()}, 50)"
-        text_on_accent = palette.color(QPalette.ColorRole.HighlightedText).name()
-        
-        # 1. Sliders (Dynamic Theme Variables)
-        # Use theme-compliant colors to prevent reverting to default blue when inactive.
-        # Make the border slightly darker than the main accent color for better contrast
-        slider_border_hex = palette.color(QPalette.ColorRole.Highlight).darker(150).name()
-        
-        slider_qss = f"""
-        QSlider::groove:vertical {{
-            background: {bg_hex};
-            border: 1px solid {border_hex};
-            width: 6px;
-            border-radius: 3px;
-        }}
-        QSlider::add-page:vertical {{
-            background: {accent_hex};
-            border: 1px solid {border_hex};
-            border-radius: 3px;
-        }}
-        QSlider::sub-page:vertical {{
-            background: transparent;
-        }}
-        QSlider::handle:vertical {{
-            background: {bg_hex};
-            border: 1px solid {slider_border_hex};
-            height: 12px;
-            margin: 0 -4px;
-            border-radius: 7px;
-        }}
-        """
-        self._slider.setStyleSheet(slider_qss)
-        
+        self._slider.update()
+
         # Color the labels using QPalette instead of stylesheets to avoid breaking Wayland native tooltips
         pal_ch = self._ch_label.palette()
         pal_ch.setColor(QPalette.ColorRole.WindowText, palette.color(QPalette.ColorRole.Highlight))
@@ -1110,6 +1185,13 @@ class MainWindow(QMainWindow):
         if 0 <= channel_index < len(self._channels):
             self._channels[channel_index].set_mute_state(is_muted)
 
+    @pyqtSlot(list)
+    @_slot_guard
+    def on_peaks_updated(self, levels: list) -> None:
+        for i, w in enumerate(self._channels):
+            if i < len(levels):
+                w.set_peak(levels[i])
+
     def _open_settings(self) -> None:
         """Open the settings panel (called from tray icon)."""
         self._toggle_settings_btn.setChecked(True)
@@ -1145,8 +1227,8 @@ class MainWindow(QMainWindow):
         for ch in self._channels:
             ch.refresh_theme()
             
-        self.repaint()
-        
+        self.update()
+
     @pyqtSlot()
     @_slot_guard
     def _on_settings_updated(self) -> None:
@@ -1311,8 +1393,7 @@ class MainWindow(QMainWindow):
         rgba_string = f"rgba({sys_color.red()}, {sys_color.green()}, {sys_color.blue()}, {alpha})"
         self.setStyleSheet(f"#MainFrame {{ background-color: {rgba_string}; border-radius: 12px; }}")
         
-        # Force a repaint to safely apply KWin compositor changes on-the-fly
-        self.repaint()
+        self.update()
         
 
 
@@ -1515,6 +1596,7 @@ class MainWindow(QMainWindow):
                     self._save_geometry()
                     self.hide()
                     logger.debug("Window auto-hidden on focus loss")
+
         super().changeEvent(event)
 
     def moveEvent(self, event) -> None:

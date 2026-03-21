@@ -525,6 +525,23 @@ def main() -> None:
     arduino.start()
     midi.start()
 
+    # ── VU Meter peak monitor ────────────────────────────────────────────
+    if hasattr(backend, "peak_monitor"):
+        backend.peak_monitor.peaks_updated.connect(window.on_peaks_updated)
+        if config.vu_meter_enabled:
+            backend.peak_monitor.start()
+
+        def _on_vu_settings_changed() -> None:
+            if config.vu_meter_enabled:
+                if not backend.peak_monitor.isRunning():
+                    backend.peak_monitor.start()
+            else:
+                if backend.peak_monitor.isRunning():
+                    backend.peak_monitor.stop()
+                window.on_peaks_updated([0.0] * config.num_channels)
+
+        config.settings_changed.connect(_on_vu_settings_changed)
+
     # ── IPC Server ──
     ipc_server = IpcServer(parent=app)
     ipc_server.toggle_mute_requested.connect(backend.toggle_mute)

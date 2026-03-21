@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from PyQt6.QtCore import QObject
+from PyQt6.QtCore import QObject, pyqtSignal
 
 
 @dataclass
@@ -44,6 +44,8 @@ class AudioBackendBase(QObject):
         - Linux  → PipeWireManager  (pulsectl)
         - Windows → WasapiManager   (pycaw, future)
     """
+
+    peaks_updated = pyqtSignal(list)  # list[float], one per channel
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
