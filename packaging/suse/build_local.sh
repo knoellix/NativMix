@@ -4,8 +4,8 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}/../.." || { echo "Error: Could not cd to repo root"; exit 1; }
 
-# Configuration - Modular variables to avoid hardcoding
-APP_VERSION="1.0.6"
+# Configuration - read version from pyproject.toml to avoid hardcoding
+APP_VERSION="$(grep -m1 '^version' "${SCRIPT_DIR}/../../pyproject.toml" | sed 's/.*"\(.*\)".*/\1/')"
 APP_RELEASE="1"
 SPEC_FILE="packaging/suse/nativmix.spec"
 RPM_ROOT="$HOME/rpmbuild"

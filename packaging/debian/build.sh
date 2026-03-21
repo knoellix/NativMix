@@ -174,8 +174,21 @@ shopt -u nullglob
 if [[ ${#installed_debs[@]} -eq 0 ]]; then
     echo "WARNING: No .deb found in $DIST_DIR — skipping install step."
 else
-    echo "==> Installing: $(basename "${installed_debs[0]}") ..."
-    sudo dpkg -i --force-overwrite "${installed_debs[@]}"
+    # Copy .deb to /tmp before installing: the dist/ directory lives on a
+    # mounted volume (FUSE / VM shared folder) that is only accessible by the
+    # mounting user.  dpkg runs as root and cannot open files on such mounts
+    # directly, causing "Keine Berechtigung" / permission denied.
+    tmp_debs=()
+    for _deb in "${installed_debs[@]}"; do
+        _tmp_deb="/tmp/$(basename "$_deb")"
+        cp "$_deb" "$_tmp_deb"
+        tmp_debs+=("$_tmp_deb")
+    done
+
+    echo "==> Installing: $(basename "${tmp_debs[0]}") ..."
+    sudo dpkg -i --force-overwrite "${tmp_debs[@]}"
+
+    rm -f "${tmp_debs[@]}"
     echo "==> Install complete."
 fi
 

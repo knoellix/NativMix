@@ -109,6 +109,7 @@ class _AudioListenerThread(QThread):
     master_volume_changed = pyqtSignal(float, bool) # For "System Master" faders
     default_sink_changed = pyqtSignal(str)          # For Hotplug/SmartLinker
     status_changed = pyqtSignal(str, str)           # (status_type, message)
+    sink_change_hint = pyqtSignal()                 # Sink changed — poll on main thread
 
     # Timeout for pactl subprocess calls inside this thread.
     # Must match PipeWireManager._SUBPROCESS_TIMEOUT — kept in sync manually.
@@ -128,16 +129,12 @@ class _AudioListenerThread(QThread):
         self._known_streams: set[int] = set()
         self._pulse: pulsectl.Pulse | None = None
         self._resolver: pulsectl.Pulse | None = None  # Second connection for lookups/actions
-        self._last_default_sink_name: str | None = None
         # Cooldown: tracks last routing timestamp per sink_input index to
         # suppress duplicate log lines from audit + stream_changed race.
         self._recently_routed: dict[int, float] = {}
         # Cooldown: tracks last volume-set timestamp for non-V-Sink streams.
         # Prevents the set_volume → PipeWire change_event → set_volume feedback loop.
         self._recently_vol_applied: dict[int, float] = {}
-        # Throttle: sink change events fire very frequently during audio playback.
-        # We only process master-volume queries at most once every 500 ms.
-        self._last_sink_event_time: float = 0.0
 
     # ------------------------------------------------------------------
     # Thread lifecycle
@@ -334,30 +331,9 @@ class _AudioListenerThread(QThread):
 
             elif event.facility == pulsectl.PulseEventFacilityEnum.sink:
                 if event.t == pulsectl.PulseEventTypeEnum.change:
-                    now = time.monotonic()
-                    if now - self._last_sink_event_time < 0.5:
-                        return
-                    self._last_sink_event_time = now
-                    if self._resolver:
-                        try:
-                            server_info = self._resolver.server_info()
-                            def_name = server_info.default_sink_name
-                            
-                            # 1. Check for Hotplug (Name change)
-                            if def_name != self._last_default_sink_name:
-                                self._last_default_sink_name = def_name
-                                self.default_sink_changed.emit(def_name)
-                                
-                            # 2. Check for Master Volume Change (System Master faders)
-                            try:
-                                sink = self._resolver.get_sink_by_name(def_name)
-                                # Get average linear volume (pulsectl volume objects have a .value property)
-                                vol = sink.volume.value_flat
-                                self.master_volume_changed.emit(vol, bool(sink.mute))
-                            except pulsectl.PulseError:
-                                pass
-                        except pulsectl.PulseError:
-                            pass
+                    # Never do blocking IPC here — this runs inside the PipeWire
+                    # event callback.  The main thread will poll via QTimer instead.
+                    self.sink_change_hint.emit()
                 
         except Exception as e:
             logger.error("Listener Error: %s", e)
@@ -736,6 +712,8 @@ class PipeWireManager(AudioBackendBase):
         # updates are suppressed for these channels until creation completes
         # to prevent stray writes hitting the system sink instead of the V-Sink.
         self._vsink_creating: set[int] = set()
+        # Debounce flag: prevents multiple concurrent QTimer-based sink polls.
+        self._sink_poll_pending: bool = False
         # VU Meter peak monitor thread
         self.peak_monitor = PeakMonitorThread(
             config=self._config,
@@ -921,8 +899,7 @@ class PipeWireManager(AudioBackendBase):
         thread.stream_added.connect(self._on_stream_added)
         thread.stream_removed.connect(self._on_stream_removed)
         thread.stream_changed.connect(self._on_stream_changed)
-        thread.master_volume_changed.connect(self._on_master_volume_changed)
-        thread.default_sink_changed.connect(self._on_default_sink_changed)
+        thread.sink_change_hint.connect(self._on_sink_change_hint)
         thread.status_changed.connect(self._on_thread_status_changed)
         thread.finished.connect(self._on_thread_finished)
 
@@ -938,8 +915,7 @@ class PipeWireManager(AudioBackendBase):
             thread.stream_added.disconnect(self._on_stream_added)
             thread.stream_removed.disconnect(self._on_stream_removed)
             thread.stream_changed.disconnect(self._on_stream_changed)
-            thread.master_volume_changed.disconnect(self._on_master_volume_changed)
-            thread.default_sink_changed.disconnect(self._on_default_sink_changed)
+            thread.sink_change_hint.disconnect(self._on_sink_change_hint)
             thread.status_changed.disconnect(self._on_thread_status_changed)
             thread.finished.disconnect(self._on_thread_finished)
         except RuntimeError:
@@ -1731,6 +1707,44 @@ class PipeWireManager(AudioBackendBase):
         """Called 2 s after run_audio_audit() finishes to allow hotplug handling."""
         self._initial_audit_complete = True
         logger.debug("Hotplug handling enabled (audit settled)")
+
+    @pyqtSlot()
+    def _on_sink_change_hint(self) -> None:
+        """
+        Slot: A sink-change event was observed by the listener thread.
+
+        This slot runs on the main (Qt) thread — not inside the PipeWire
+        event callback — so it is safe to schedule a deferred poll without
+        risking a deadlock.  Multiple hint signals that arrive while a poll
+        is already scheduled are collapsed into the single pending timer.
+        """
+        if not self._sink_poll_pending:
+            self._sink_poll_pending = True
+            QTimer.singleShot(800, self._do_sink_poll)
+
+    @pyqtSlot()
+    def _do_sink_poll(self) -> None:
+        """
+        Poll the default sink for master volume and hotplug changes.
+
+        Opens a short-lived pulsectl connection from the main thread so it
+        never races with the listener thread's event loop.  Both downstream
+        handlers (_on_default_sink_changed, _on_master_volume_changed) have
+        their own guards and are safe to call unconditionally.
+        """
+        self._sink_poll_pending = False
+        try:
+            with pulsectl.Pulse("nativmix-sink-poll") as pulse:
+                server_info = pulse.server_info()
+                def_name = server_info.default_sink_name
+                self._on_default_sink_changed(def_name)
+                try:
+                    sink = pulse.get_sink_by_name(def_name)
+                    self._on_master_volume_changed(sink.volume.value_flat, bool(sink.mute))
+                except pulsectl.PulseError:
+                    pass
+        except pulsectl.PulseError:
+            pass
 
     def _on_default_sink_changed(self, new_default_sink: str) -> None:
         """
