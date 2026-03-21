@@ -139,6 +139,12 @@ class _AudioListenerThread(QThread):
         # Throttle: sink change events fire very frequently during audio playback.
         # We only process master-volume queries at most once every 500 ms.
         self._last_sink_event_time: float = 0.0
+        # Throttle: sink_input change events for KNOWN stable streams.
+        # Moving the system volume triggers change events for every active
+        # sink_input — throttle to 2 Hz per stream to avoid flooding the
+        # resolver with sink_input_info() calls.
+        # Critical streams (new / reflex-muted) always bypass this throttle.
+        self._last_stream_change: dict[int, float] = {}
 
     # ------------------------------------------------------------------
     # Thread lifecycle
@@ -260,6 +266,20 @@ class _AudioListenerThread(QThread):
                         logger.debug("Reflex mute failed for index %d: %s", event.index, e)
                             
                 elif event.t == pulsectl.PulseEventTypeEnum.change:
+                    # Throttle change events for known, stable streams.
+                    # System-volume moves emit a change event for every active
+                    # sink_input; without throttling this floods resolver with
+                    # sink_input_info() calls and makes the GUI sluggish.
+                    # New streams and reflex-muted streams always bypass this
+                    # so the Two-Stage Mute-Catch critical path is unaffected.
+                    is_critical = (event.index in self._reflex_muted or
+                                   event.index not in self._known_streams)
+                    if not is_critical:
+                        _now = time.monotonic()
+                        if _now - self._last_stream_change.get(event.index, 0.0) < 0.5:
+                            return
+                        self._last_stream_change[event.index] = _now
+
                     # Stage 2: Resolution - Resolve and Reconnect
                     # We MUST use the separate 'resolver' connection here.
                     if not self._resolver: return
@@ -311,6 +331,7 @@ class _AudioListenerThread(QThread):
                         self._known_streams.remove(event.index)
                     if event.index in self._reflex_muted:
                         self._reflex_muted.remove(event.index)
+                    self._last_stream_change.pop(event.index, None)
                     self.stream_removed.emit(event.index)
 
             elif event.facility == pulsectl.PulseEventFacilityEnum.sink:
