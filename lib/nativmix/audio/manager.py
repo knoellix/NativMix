@@ -103,8 +103,6 @@ class _AudioListenerThread(QThread):
     stream_removed = pyqtSignal(int)     # sink_input index
     stream_changed = pyqtSignal(object)  # StreamInfo
     stream_list_changed = pyqtSignal()   # emitted after add or remove (for GUI refresh)
-    master_volume_changed = pyqtSignal(float, bool) # For "System Master" faders
-    default_sink_changed = pyqtSignal(str)          # For Hotplug/SmartLinker
     status_changed = pyqtSignal(str, str)           # (status_type, message)
 
     # Timeout for pactl subprocess calls inside this thread.
@@ -125,7 +123,6 @@ class _AudioListenerThread(QThread):
         self._known_streams: set[int] = set()
         self._pulse: pulsectl.Pulse | None = None
         self._resolver: pulsectl.Pulse | None = None  # Second connection for lookups/actions
-        self._last_default_sink_name: str | None = None
         # Cooldown: tracks last routing timestamp per sink_input index to
         # suppress duplicate log lines from audit + stream_changed race.
         self._recently_routed: dict[int, float] = {}
@@ -299,27 +296,7 @@ class _AudioListenerThread(QThread):
                     self.stream_removed.emit(event.index)
 
             elif event.facility == pulsectl.PulseEventFacilityEnum.sink:
-                if event.t == pulsectl.PulseEventTypeEnum.change:
-                    if self._resolver:
-                        try:
-                            server_info = self._resolver.server_info()
-                            def_name = server_info.default_sink_name
-                            
-                            # 1. Check for Hotplug (Name change)
-                            if def_name != self._last_default_sink_name:
-                                self._last_default_sink_name = def_name
-                                self.default_sink_changed.emit(def_name)
-                                
-                            # 2. Check for Master Volume Change (System Master faders)
-                            try:
-                                sink = self._resolver.get_sink_by_name(def_name)
-                                # Get average linear volume (pulsectl volume objects have a .value property)
-                                vol = sink.volume.value_flat
-                                self.master_volume_changed.emit(vol, bool(sink.mute))
-                            except pulsectl.PulseError:
-                                pass
-                        except pulsectl.PulseError:
-                            pass
+                pass  # Sink volume/hotplug is polled by SinkPollThread — no IPC here
                 
         except Exception as e:
             logger.error("Listener Error: %s", e)
@@ -456,6 +433,77 @@ class _AudioListenerThread(QThread):
         )
 
 
+class SinkPollThread(QThread):
+    """
+    Polls the PipeWire default sink every 250 ms from a dedicated background thread.
+
+    This replaces the previous approach of doing server_info() / get_sink_by_name()
+    directly inside the PipeWire event callback (_AudioListenerThread._on_event),
+    which caused deadlocks and CPU spikes during event storms (e.g. external
+    system volume changes).
+
+    Signals
+    -------
+    master_volume_changed(float, bool)
+        Emitted whenever the default sink's volume or mute state changes.
+    default_sink_changed(str)
+        Emitted whenever the default sink name changes (hotplug / device switch).
+    """
+
+    master_volume_changed = pyqtSignal(float, bool)
+    default_sink_changed = pyqtSignal(str)
+
+    _POLL_INTERVAL: float = 0.25  # seconds
+
+    def __init__(self, parent: Any = None) -> None:
+        super().__init__(parent)
+        self._running = False
+
+    def run(self) -> None:
+        self._running = True
+        _last_sink_name: str | None = None
+        _last_vol: float | None = None
+        _last_mute: bool | None = None
+
+        while self._running:
+            try:
+                with pulsectl.Pulse("nativmix-sink-poll") as pulse:
+                    while self._running:
+                        try:
+                            info = pulse.server_info()
+                            name = info.default_sink_name
+                            if name != _last_sink_name:
+                                _last_sink_name = name
+                                self.default_sink_changed.emit(name)
+                            sink = pulse.get_sink_by_name(name)
+                            vol = sink.volume.value_flat
+                            mute = bool(sink.mute)
+                            if vol != _last_vol or mute != _last_mute:
+                                _last_vol = vol
+                                _last_mute = mute
+                                self.master_volume_changed.emit(vol, mute)
+                        except pulsectl.PulseError:
+                            pass
+                        # Interruptible sleep: 5 × 50 ms so stop() wakes us promptly
+                        for _ in range(5):
+                            if not self._running:
+                                break
+                            time.sleep(self._POLL_INTERVAL / 5)
+            except Exception:
+                # PipeWire restarted or connection failed — retry after 1 s
+                for _ in range(10):
+                    if not self._running:
+                        break
+                    time.sleep(0.1)
+
+    def stop(self) -> None:
+        self._running = False
+        self.wait(2000)
+        if self.isRunning():
+            self.terminate()
+            self.wait(500)
+
+
 class PipeWireManager(AudioBackendBase):
     """
     Linux audio backend using pulsectl to control PipeWire/PulseAudio.
@@ -507,6 +555,9 @@ class PipeWireManager(AudioBackendBase):
         # updates are suppressed for these channels until creation completes
         # to prevent stray writes hitting the system sink instead of the V-Sink.
         self._vsink_creating: set[int] = set()
+        # Sink poller: polls default sink volume/name from a dedicated thread
+        # instead of doing blocking IPC inside the PipeWire event callback.
+        self._sink_poll_thread = SinkPollThread()
 
     # ------------------------------------------------------------------
     # Public stream access (for GUI)
@@ -677,6 +728,10 @@ class PipeWireManager(AudioBackendBase):
         self._thread.start()
         self._update_thread_states()  # Initial push of states
 
+        self._sink_poll_thread.master_volume_changed.connect(self._on_master_volume_changed)
+        self._sink_poll_thread.default_sink_changed.connect(self._on_default_sink_changed)
+        self._sink_poll_thread.start()
+
         # Audit and fix loopbacks / apps routing (replaces _adopt_existing_v_sinks)
         self.perform_initial_audio_audit()
         logger.info("PipeWireManager started")
@@ -686,8 +741,6 @@ class PipeWireManager(AudioBackendBase):
         thread.stream_added.connect(self._on_stream_added)
         thread.stream_removed.connect(self._on_stream_removed)
         thread.stream_changed.connect(self._on_stream_changed)
-        thread.master_volume_changed.connect(self._on_master_volume_changed)
-        thread.default_sink_changed.connect(self._on_default_sink_changed)
         thread.status_changed.connect(self._on_thread_status_changed)
         thread.finished.connect(self._on_thread_finished)
 
@@ -703,8 +756,6 @@ class PipeWireManager(AudioBackendBase):
             thread.stream_added.disconnect(self._on_stream_added)
             thread.stream_removed.disconnect(self._on_stream_removed)
             thread.stream_changed.disconnect(self._on_stream_changed)
-            thread.master_volume_changed.disconnect(self._on_master_volume_changed)
-            thread.default_sink_changed.disconnect(self._on_default_sink_changed)
             thread.status_changed.disconnect(self._on_thread_status_changed)
             thread.finished.disconnect(self._on_thread_finished)
         except RuntimeError:
@@ -757,6 +808,7 @@ class PipeWireManager(AudioBackendBase):
     def stop(self) -> None:
         """Stop the listener thread gracefully."""
         self._running = False
+        self._sink_poll_thread.stop()
         if self._thread is not None:
             # Disconnect first so no signals fire during or after stop().
             self._unwire_thread_signals(self._thread)
