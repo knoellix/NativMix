@@ -122,6 +122,7 @@ class _WasapiListenerThread(QThread):
     stream_removed = pyqtSignal(int)      # pid
     audit_finished = pyqtSignal()
     status_changed = pyqtSignal(str, str) # (status_type, message)
+    peaks_updated  = pyqtSignal(list)     # list[float], one per channel
 
     _POLL_INTERVAL_MS = 250
 
@@ -219,6 +220,35 @@ class _WasapiListenerThread(QThread):
             del self._known[pid]
             self.stream_removed.emit(pid)
 
+        if self._config.vu_meter_enabled:
+            self.peaks_updated.emit(self._collect_peaks(sessions, current))
+
+    def _collect_peaks(self, sessions: list, pid_to_name: dict[int, str]) -> list[float]:
+        """Return per-channel peak levels by querying IAudioMeterInformation."""
+        try:
+            from pycaw.pycaw import IAudioMeterInformation
+            from ctypes import cast, POINTER
+        except ImportError:
+            return [0.0] * self._config.num_channels
+
+        name_to_channel = self._config.get_all_assigned_apps_by_name()
+        channel_peaks: list[float] = [0.0] * self._config.num_channels
+        for session in sessions:
+            pid = session.ProcessId
+            if pid == 0:
+                continue
+            name = pid_to_name.get(pid, "")
+            ch = name_to_channel.get(name.lower())
+            if ch is None:
+                continue
+            try:
+                meter = session._ctl.QueryInterface(IAudioMeterInformation)
+                peak = meter.GetPeakValue()
+                channel_peaks[ch] = max(channel_peaks[ch], float(peak))
+            except Exception:
+                pass
+        return channel_peaks
+
 
 # ---------------------------------------------------------------------------
 # WasapiManager
@@ -269,6 +299,7 @@ class WasapiManager(AudioBackendBase):
         self._thread.stream_removed.connect(self._on_stream_removed)
         self._thread.audit_finished.connect(self.audit_finished)
         self._thread.status_changed.connect(self.status_changed)
+        self._thread.peaks_updated.connect(self.peaks_updated)
         self._thread.start()
         logger.info("WasapiManager started (WASAPI available: %s)", _WASAPI_AVAILABLE)
 

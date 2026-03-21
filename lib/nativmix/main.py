@@ -24,7 +24,6 @@ from PyQt6.QtWidgets import QStyleFactory
 from PyQt6.QtGui import QIcon
 from PyQt6.QtNetwork import QLocalSocket, QLocalServer
 from PyQt6.QtCore import pyqtSignal, QObject, QTimer, QSocketNotifier
-import mido
 
 APP_NAME = "nativmix"
 # Qt6 setDesktopFileName requires the name WITHOUT the .desktop suffix
@@ -541,6 +540,15 @@ def main() -> None:
                 window.on_peaks_updated([0.0] * config.num_channels)
 
         config.settings_changed.connect(_on_vu_settings_changed)
+    elif hasattr(backend, "peaks_updated"):
+        # Windows (WasapiManager): peaks are emitted directly by the backend.
+        backend.peaks_updated.connect(window.on_peaks_updated)
+
+        def _on_vu_settings_changed_win() -> None:
+            if not config.vu_meter_enabled:
+                window.on_peaks_updated([0.0] * config.num_channels)
+
+        config.settings_changed.connect(_on_vu_settings_changed_win)
 
     # ── IPC Server ──
     ipc_server = IpcServer(parent=app)

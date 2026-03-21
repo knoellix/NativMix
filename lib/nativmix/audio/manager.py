@@ -132,6 +132,9 @@ class _AudioListenerThread(QThread):
         # Cooldown: tracks last routing timestamp per sink_input index to
         # suppress duplicate log lines from audit + stream_changed race.
         self._recently_routed: dict[int, float] = {}
+        # Cooldown: tracks last volume-set timestamp for non-V-Sink streams.
+        # Prevents the set_volume → PipeWire change_event → set_volume feedback loop.
+        self._recently_vol_applied: dict[int, float] = {}
 
     # ------------------------------------------------------------------
     # Thread lifecycle
@@ -397,12 +400,23 @@ class _AudioListenerThread(QThread):
                         except (pulsectl.PulseError, TypeError, ValueError) as e:
                             logger.debug("Minor: Could not update volume after move (stream may have closed): %s", e)
             else:
+                # Non-V-Sink: apply configured volume, but with a 2 s cooldown to
+                # break the set_volume → PipeWire change_event → set_volume loop.
+                now = time.monotonic()
+                last = self._recently_vol_applied.get(info.index, 0.0)
+                if now - last < 2.0:
+                    return
+                # Prune stale entries to keep the dict small
+                self._recently_vol_applied = {
+                    k: v for k, v in self._recently_vol_applied.items() if now - v < 10.0
+                }
+                self._recently_vol_applied[info.index] = now
                 try:
                     si_fresh = pulse.sink_input_info(info.index)
                     if si_fresh and not isinstance(si_fresh, int):
                         pulse.volume_set_all_chans(si_fresh, vol)
                     else:
-                        logger.info("Received status ID (%s) instead of metadata object for %s, skipping volume sync", 
+                        logger.info("Received status ID (%s) instead of metadata object for %s, skipping volume sync",
                                     si_fresh, info.app_name)
                 except (pulsectl.PulseError, TypeError, ValueError) as e:
                     logger.debug("Minor: Could not apply volume (stream may have closed): %s", e)
@@ -931,8 +945,8 @@ class PipeWireManager(AudioBackendBase):
         logger.debug("PipeWireManager stopped")
 
     def _check_tools(self) -> dict[str, bool]:
-        """Check availability of required system tools (pactl, pw-link)."""
-        tools = {"pactl": False, "pw-link": False}
+        """Check availability of required system tools (pactl, pw-link, pw-dump)."""
+        tools = {"pactl": False, "pw-link": False, "pw-dump": False}
         for tool in tools:
             try:
                 subprocess.run(["which", tool], capture_output=True, check=True,
@@ -940,6 +954,16 @@ class PipeWireManager(AudioBackendBase):
                 tools[tool] = True
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
                 pass
+
+        vsink_tools_available = tools["pw-link"] and tools["pw-dump"]
+        if not vsink_tools_available:
+            missing = [t for t in ("pw-link", "pw-dump") if not tools[t]]
+            logger.warning(
+                "V-Sinks not available on this system: %s not found. "
+                "V-Sink routing requires PipeWire with pw-link and pw-dump. "
+                "Basic volume control will still work.",
+                ", ".join(missing),
+            )
         return tools
 
     def perform_initial_audio_audit(self) -> None:
