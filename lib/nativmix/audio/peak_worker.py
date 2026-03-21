@@ -14,12 +14,21 @@ stderr → ignored by parent; errors go to /dev/null effectively.
 
 The worker loops continuously, sampling each source with a short timeout
 so each cycle takes roughly len(non-null sources) * timeout seconds.
+
+Exit codes
+----------
+0 — clean stop (stdin closed by parent)
+1 — unrecoverable error (PulseDisconnected, bad config, …)
 """
 
 from __future__ import annotations
 
 import json
 import sys
+
+# Consecutive per-source errors before that source is skipped for the rest
+# of the session.  Avoids tight loops when a monitor source disappears.
+_MAX_SOURCE_ERRORS = 10
 
 
 def main() -> None:
@@ -33,21 +42,36 @@ def main() -> None:
     # Defer import: only this subprocess should ever import pulsectl
     import pulsectl  # noqa: PLC0415
 
+    # Per-source consecutive error counter.  When a source exceeds the
+    # threshold it is treated as None (returns 0.0) until the process restarts.
+    error_counts: list[int] = [0] * len(sources)
+
     try:
         with pulsectl.Pulse("nativmix-peak-worker") as pulse:
             while True:
                 levels: list[float] = []
-                for src in sources:
-                    if src is None:
+                for i, src in enumerate(sources):
+                    if src is None or error_counts[i] >= _MAX_SOURCE_ERRORS:
                         levels.append(0.0)
-                    else:
-                        try:
-                            v = pulse.get_peak_sample(src, 0.05)
-                            levels.append(float(v or 0.0))
-                        except Exception:
-                            levels.append(0.0)
+                        continue
+                    try:
+                        v = pulse.get_peak_sample(src, 0.05)
+                        levels.append(float(v or 0.0))
+                        error_counts[i] = 0  # reset on success
+                    except pulsectl.PulseOperationFailed:
+                        # Source temporarily unavailable (e.g. suspended when
+                        # system volume is 0).  Return 0.0 and keep trying.
+                        error_counts[i] += 1
+                        levels.append(0.0)
+                    except Exception:
+                        error_counts[i] += 1
+                        levels.append(0.0)
                 sys.stdout.write(json.dumps(levels) + "\n")
                 sys.stdout.flush()
+    except pulsectl.PulseDisconnected:
+        # PipeWire restarted or the connection was lost — exit cleanly so the
+        # parent can restart us after its 2 s retry delay.
+        sys.exit(1)
     except Exception:
         sys.exit(1)
 

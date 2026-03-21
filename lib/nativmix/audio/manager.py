@@ -524,17 +524,36 @@ class PeakMonitorThread(QThread):
         sources = self._build_sources()
         has_vsink = any(s is not None for s in sources)
 
-        if has_vsink and self._crash_count < self._MAX_CRASHES:
+        # Retry loop: restart the subprocess after transient crashes (e.g. PipeWire
+        # suspending the monitor source when system volume goes to 0).  A 2 s delay
+        # between attempts avoids tight crash loops.  After _MAX_CRASHES consecutive
+        # failures the thread gives up and stays in proxy mode permanently.
+        while has_vsink and self._crash_count < self._MAX_CRASHES and self._running:
             try:
                 self._run_subprocess_loop(sources)
+                break  # clean exit — _running was set to False
             except Exception as exc:
                 self._crash_count += 1
                 logger.warning(
                     "PeakMonitorThread: peak worker exited (%d/%d): %s",
                     self._crash_count, self._MAX_CRASHES, exc,
                 )
+                if self._running and self._crash_count < self._MAX_CRASHES:
+                    logger.info("PeakMonitorThread: restarting peak worker in 2 s …")
+                    # Interruptible sleep so stop() is not delayed
+                    for _ in range(20):
+                        if not self._running:
+                            break
+                        time.sleep(0.1)
 
-        # Fall back to proxy (either no V-sinks or subprocess kept crashing)
+        if self._crash_count >= self._MAX_CRASHES:
+            logger.warning(
+                "PeakMonitorThread: subprocess crashed %d times — falling back to "
+                "volume-proxy mode permanently for this session.",
+                self._MAX_CRASHES,
+            )
+
+        # Fall back to proxy (no V-sinks, clean exit, or max crashes reached)
         self._run_proxy_loop()
 
     def stop(self) -> None:
@@ -597,9 +616,21 @@ class PeakMonitorThread(QThread):
                         levels.append(self._proxy_level(streams, ch))
                 self.peaks_updated.emit(levels)
         finally:
+            # Two-phase shutdown: SIGTERM → wait 1 s → SIGKILL.
+            # Without SIGKILL, a subprocess blocked in get_peak_sample() may survive
+            # the wait() timeout and keep its pulsectl recording stream open, which
+            # causes audio glitches on the V-Sink source.
+            try:
+                proc.stdout.close()
+            except Exception:
+                pass
             try:
                 proc.terminate()
-                proc.wait(timeout=2)
+                proc.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                logger.debug("PeakMonitorThread: peak worker did not exit cleanly — sending SIGKILL")
+                proc.kill()
+                proc.wait()
             except Exception:
                 pass
 
