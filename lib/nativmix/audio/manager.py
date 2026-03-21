@@ -35,6 +35,7 @@ Or using a venv:
 
 from __future__ import annotations
 
+import gc
 import json
 import logging
 import re
@@ -135,6 +136,9 @@ class _AudioListenerThread(QThread):
         # Cooldown: tracks last volume-set timestamp for non-V-Sink streams.
         # Prevents the set_volume → PipeWire change_event → set_volume feedback loop.
         self._recently_vol_applied: dict[int, float] = {}
+        # Throttle: sink change events fire very frequently during audio playback.
+        # We only process master-volume queries at most once every 500 ms.
+        self._last_sink_event_time: float = 0.0
 
     # ------------------------------------------------------------------
     # Thread lifecycle
@@ -311,6 +315,10 @@ class _AudioListenerThread(QThread):
 
             elif event.facility == pulsectl.PulseEventFacilityEnum.sink:
                 if event.t == pulsectl.PulseEventTypeEnum.change:
+                    now = time.monotonic()
+                    if now - self._last_sink_event_time < 0.5:
+                        return
+                    self._last_sink_event_time = now
                     if self._resolver:
                         try:
                             server_info = self._resolver.server_info()
@@ -1047,13 +1055,35 @@ class PipeWireManager(AudioBackendBase):
     # Signal handlers (called on the main/GUI thread by Qt's signal dispatch)
     # ------------------------------------------------------------------
 
+    def _update_other_apps(self) -> None:
+        """Recompute the unmapped-apps list from _active_streams and emit if changed.
+
+        Replaces the former pattern of calling get_active_streams() on every
+        stream add/remove, which opened a new pulsectl connection each time and
+        caused the process RSS to grow steadily (libpulse C-heap is not returned
+        to the OS immediately after each transient connection is closed).
+        """
+        assigned_apps = self._config.get_all_assigned_apps_by_name()
+        with self._state_lock:
+            streams = list(self._active_streams.values())
+        unmapped = sorted({
+            info.app_name for info in streams
+            if self.is_valid_app_stream(info)
+            and info.app_name.lower() not in assigned_apps
+            and info.app_name.lower() != "system master"
+        })
+        if getattr(self, "_last_other_apps", None) != unmapped:
+            self._last_other_apps = unmapped
+            self.other_apps_changed.emit(unmapped)
+
     def _on_stream_added(self, info: StreamInfo) -> None:
         """Slot: track stream."""
         with self._state_lock:
             self._active_streams[info.index] = info
         logger.debug("Stream added: [%d] %s (pid=%d, vol=%.2f)", info.index, info.app_name, info.pid, info.volume)
-        # Recalculate unmapped apps for tooltips
-        self.get_active_streams()
+        # Update unmapped-apps tooltip from the cached dict — no new pulsectl
+        # connection needed; _active_streams is kept current by the event handlers.
+        self._update_other_apps()
 
     def _on_stream_removed(self, index: int) -> None:
         """Slot: remove stream and clear cache."""
@@ -1061,8 +1091,9 @@ class PipeWireManager(AudioBackendBase):
             self._active_streams.pop(index, None)
         invalidate_cache()
         logger.debug("Stream removed: [%d]", index)
-        # Recalculate unmapped apps for tooltips
-        self.get_active_streams()
+        self._update_other_apps()
+        # Help Python reclaim C-heap from pulsectl objects promptly.
+        gc.collect()
 
     def _on_stream_changed(self, info: StreamInfo) -> None:
         """Slot: update cached stream info on change."""
