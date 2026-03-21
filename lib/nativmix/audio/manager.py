@@ -545,11 +545,11 @@ class PeakMonitorThread(QThread):
         sources = self._build_sources()
         has_vsink = any(s is not None for s in sources)
 
-        # The peak_worker subprocess handles transient PipeWire disconnects
-        # internally (reconnect loop with 0.3 s delay).  It only exits with
-        # code 1 for genuinely unrecoverable errors.  We therefore restart it
-        # immediately on unexpected exit — no delay needed here.
-        # After _MAX_CRASHES consecutive hard failures we fall back to proxy.
+        # Restart loop: peak_worker exits cleanly (code 1) on session-level
+        # PipeWire errors (e.g. disconnect during system-volume changes).
+        # Wait 1 s between attempts to prevent rapid libpulse init/destroy
+        # cycles that spike memory and CPU.  After _MAX_CRASHES failures the
+        # thread falls back to proxy mode permanently for this session.
         while has_vsink and self._crash_count < self._MAX_CRASHES and self._running:
             try:
                 self._run_subprocess_loop(sources)
@@ -557,9 +557,15 @@ class PeakMonitorThread(QThread):
             except Exception as exc:
                 self._crash_count += 1
                 logger.warning(
-                    "PeakMonitorThread: peak worker hard-exited (%d/%d): %s",
+                    "PeakMonitorThread: peak worker exited (%d/%d): %s",
                     self._crash_count, self._MAX_CRASHES, exc,
                 )
+                if self._running and self._crash_count < self._MAX_CRASHES:
+                    # Interruptible 1 s pause — stop() is not delayed more than 100 ms
+                    for _ in range(10):
+                        if not self._running:
+                            break
+                        time.sleep(0.1)
 
         if self._crash_count >= self._MAX_CRASHES:
             logger.warning(
@@ -1138,8 +1144,6 @@ class PipeWireManager(AudioBackendBase):
         invalidate_cache()
         logger.debug("Stream removed: [%d]", index)
         self._update_other_apps()
-        # Help Python reclaim C-heap from pulsectl objects promptly.
-        gc.collect()
 
     def _on_stream_changed(self, info: StreamInfo) -> None:
         """Slot: update cached stream info on change."""
