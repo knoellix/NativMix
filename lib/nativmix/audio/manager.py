@@ -524,10 +524,11 @@ class PeakMonitorThread(QThread):
         sources = self._build_sources()
         has_vsink = any(s is not None for s in sources)
 
-        # Retry loop: restart the subprocess after transient crashes (e.g. PipeWire
-        # suspending the monitor source when system volume goes to 0).  A 2 s delay
-        # between attempts avoids tight crash loops.  After _MAX_CRASHES consecutive
-        # failures the thread gives up and stays in proxy mode permanently.
+        # The peak_worker subprocess handles transient PipeWire disconnects
+        # internally (reconnect loop with 0.3 s delay).  It only exits with
+        # code 1 for genuinely unrecoverable errors.  We therefore restart it
+        # immediately on unexpected exit — no delay needed here.
+        # After _MAX_CRASHES consecutive hard failures we fall back to proxy.
         while has_vsink and self._crash_count < self._MAX_CRASHES and self._running:
             try:
                 self._run_subprocess_loop(sources)
@@ -535,21 +536,14 @@ class PeakMonitorThread(QThread):
             except Exception as exc:
                 self._crash_count += 1
                 logger.warning(
-                    "PeakMonitorThread: peak worker exited (%d/%d): %s",
+                    "PeakMonitorThread: peak worker hard-exited (%d/%d): %s",
                     self._crash_count, self._MAX_CRASHES, exc,
                 )
-                if self._running and self._crash_count < self._MAX_CRASHES:
-                    logger.info("PeakMonitorThread: restarting peak worker in 2 s …")
-                    # Interruptible sleep so stop() is not delayed
-                    for _ in range(20):
-                        if not self._running:
-                            break
-                        time.sleep(0.1)
 
         if self._crash_count >= self._MAX_CRASHES:
             logger.warning(
-                "PeakMonitorThread: subprocess crashed %d times — falling back to "
-                "volume-proxy mode permanently for this session.",
+                "PeakMonitorThread: subprocess failed %d times — "
+                "falling back to volume-proxy mode for this session.",
                 self._MAX_CRASHES,
             )
 
