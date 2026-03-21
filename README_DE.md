@@ -65,6 +65,12 @@ paru -S nativmix
 ## Update-Verlauf
 
 **v1.0.7**
+- VU-Meter: Echtzeit-Pegelbalken pro Kanal mit Peak-Hold-Marker (experimentell, stabil bestätigt auf CachyOS)
+- VU-Meter: Windows-WASAPI-Unterstützung via IAudioMeterInformation (Echtzeit-Pegelabtastung pro Session)
+- VU-Meter: isolierter Peak-Worker-Subprocess für V-Sink-Kanäle — Haupt-App bleibt stabil wenn libpulse abstürzt
+- VU-Meter: automatischer Fallback auf Fader-Proxy-Modus nach 3 Subprocess-Abstürzen
+- Fix: Speicherwachstum in PipeWireManager — Stream-Add/Remove öffnet keine neue pulsectl-Verbindung mehr; Sink-Change-Events auf 500 ms gedrosselt
+- Fix: WASAPI-Poll-Intervall von 150 ms auf 250 ms erhöht; pw-dump-Ausgabe für 500 ms gecacht beim V-Sink-Setup
 - Windows: Installer (PyInstaller + Inno Setup), frühe Alpha
 - Windows: WASAPI-Audio-Backend implementiert (pycaw), Stabilität wird evaluiert
 - Windows: App-Lautstärkeregelung via Arduino implementiert (frühe Alpha)
