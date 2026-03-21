@@ -265,6 +265,7 @@ class WasapiManager(AudioBackendBase):
     other_apps_changed    = pyqtSignal(list)
     audit_finished        = pyqtSignal()
     status_changed        = pyqtSignal(str, str)
+    peaks_updated         = pyqtSignal(list)     # list[float], one per channel
 
     def __init__(self, config: ConfigManager | None = None, parent=None) -> None:
         super().__init__(parent)

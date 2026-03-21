@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # build.sh — NativMix Debian build script
-# Version : 1.0.6
+# Version : 1.0.7
 #
 # Usage   : Run from packaging/debian/
 #               bash build.sh
@@ -161,6 +161,22 @@ if [[ $artifact_count -eq 0 ]]; then
     echo "WARNING: No artifacts found in $BUILD_ROOT — the build may have failed silently."
 else
     echo "    $artifact_count artifact(s) moved."
+fi
+
+# ---------------------------------------------------------------------------
+# Install — force-reinstall the freshly built .deb
+# ---------------------------------------------------------------------------
+
+shopt -s nullglob
+installed_debs=("$DIST_DIR"/*"${PKG_VERSION}"*.deb)
+shopt -u nullglob
+
+if [[ ${#installed_debs[@]} -eq 0 ]]; then
+    echo "WARNING: No .deb found in $DIST_DIR — skipping install step."
+else
+    echo "==> Installing: $(basename "${installed_debs[0]}") ..."
+    sudo dpkg -i --force-overwrite "${installed_debs[@]}"
+    echo "==> Install complete."
 fi
 
 # ---------------------------------------------------------------------------

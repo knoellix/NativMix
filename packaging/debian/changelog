@@ -1,3 +1,12 @@
+nativmix (1.0.7) noble; urgency=medium
+
+  * Add VU meter for Windows WASAPI (fix missing peaks_updated signal)
+  * Add pw-dump to tool check; warn when V-Sinks not available
+  * Fix set_volume feedback loop via 2 s cooldown
+  * Document PipeWire requirement for V-Sinks in wiki
+
+ -- knoellix <deine@mail.de>  Sat, 21 Mar 2026 00:00:00 +0100
+
 nativmix (1.0.6) noble; urgency=medium
 
   * Manual build for Ubuntu 24.04 (Noble)
