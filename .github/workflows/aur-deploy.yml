@@ -1,24 +1,17 @@
 name: AUR Deploy
 
-# AUR SSH git writes are disabled for community accounts while Arch handles
-# malicious package adoptions/commits (official: pushes disabled altogether).
-# Retries + schedule keep trying until packaging/aur matches AUR.
+# Manual only while Arch has AUR pushes disabled for community accounts.
+# Re-enable tag/schedule triggers after Arch reopens writes:
 # https://lists.archlinux.org/archives/list/aur-general@lists.archlinux.org/message/YPJ3FQYJTJXXY3RUXCYLMHUKHLIUNVFF/
-# https://bbs.archlinux.org/viewtopic.php?pid=2306487
+# Tracking: https://github.com/knoellix/NativMix/issues/24
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
-  schedule:
-    # Keep probing while AUR SSH write is intermittently/blocked
-    - cron: '15 */4 * * *'
 
 jobs:
   aur-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 60
     permissions:
       contents: read
     steps:
@@ -30,9 +23,6 @@ jobs:
       - name: Deploy to AUR
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.NATIVMIX_AUR_KEY }}
-          # Per-attempt wait (seconds) and max attempts for clone/push
-          AUR_RETRY_SLEEP: '120'
-          AUR_RETRY_MAX: '90'
         run: |
           set -euo pipefail
 
@@ -46,12 +36,11 @@ jobs:
           WANT_VER="${PKGVER}-${PKGREL}"
           echo "Wanted AUR version: ${WANT_VER}"
 
-          # Skip scheduled runs when AUR already has this version (HTTPS RPC works while SSH write does not)
-          AUR_VER="$(curl -fsSL "https://aur.archlinux.org/rpc/v5/info?arg[]=nativmix" \
-            | python3 -c 'import sys,json; r=json.load(sys.stdin)["results"]; print(r[0]["Version"] if r else "")')"
+          AUR_VER="$(curl -fsSL -A 'nativmix-aur-deploy' "https://aur.archlinux.org/rpc/v5/info?arg[]=nativmix" \
+            | python3 -c 'import sys,json; r=json.load(sys.stdin)["results"]; print(r[0]["Version"] if r else "")' || true)"
           echo "Current AUR version: ${AUR_VER:-<unknown>}"
-          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] && [ -n "${AUR_VER}" ] && [ "${AUR_VER}" = "${WANT_VER}" ]; then
-            echo "AUR already at ${WANT_VER}; nothing to do on schedule."
+          if [ -n "${AUR_VER}" ] && [ "${AUR_VER}" = "${WANT_VER}" ]; then
+            echo "AUR already at ${WANT_VER}; nothing to do."
             exit 0
           fi
 
@@ -110,7 +99,6 @@ jobs:
           } > ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-          # Auth banner can succeed while git write is still "maintenance"
           echo "Testing SSH auth to AUR..."
           ssh -T aur@aur.archlinux.org 2>&1 | tee /tmp/aur_ssh_hello || true
           if ! grep -Eiq 'welcome to aur|hi[[:space:]]' /tmp/aur_ssh_hello; then
@@ -118,55 +106,18 @@ jobs:
             exit 1
           fi
 
-          is_aur_write_up() {
-            # "help" fails with the same maintenance banner as git while write is locked
-            out="$(ssh -o BatchMode=yes -o ConnectTimeout=20 aur@aur.archlinux.org help 2>&1 || true)"
-            if printf '%s' "$out" | grep -qi 'maintenance'; then
-              return 1
-            fi
-            if printf '%s' "$out" | grep -Eiq 'commands|git-receive|usage|available'; then
-              return 0
-            fi
-            # Unknown response: treat as not ready
-            printf '%s\n' "$out" | head -5
-            return 1
-          }
+          # Fail fast if Arch still has writes disabled (no multi-hour polling)
+          help_out="$(ssh -o BatchMode=yes -o ConnectTimeout=20 aur@aur.archlinux.org help 2>&1 || true)"
+          if printf '%s' "$help_out" | grep -qi 'maintenance'; then
+            echo "ERROR: AUR SSH write still disabled (maintenance banner)."
+            echo "Official: https://lists.archlinux.org/archives/list/aur-general@lists.archlinux.org/message/YPJ3FQYJTJXXY3RUXCYLMHUKHLIUNVFF/"
+            echo "Tracking: https://github.com/knoellix/NativMix/issues/24"
+            exit 1
+          fi
 
-          echo "Waiting for AUR SSH write access (not just auth)..."
-          attempt=1
-          while [ "$attempt" -le "$AUR_RETRY_MAX" ]; do
-            if is_aur_write_up; then
-              echo "AUR SSH write appears up (attempt ${attempt})."
-              break
-            fi
-            echo "AUR still read-only/maintenance (attempt ${attempt}/${AUR_RETRY_MAX}); sleep ${AUR_RETRY_SLEEP}s..."
-            if [ "$attempt" -eq "$AUR_RETRY_MAX" ]; then
-              echo "ERROR: AUR SSH write still unavailable after ${AUR_RETRY_MAX} attempts."
-              echo "Scheduled runs will keep retrying."
-              echo "Official: https://lists.archlinux.org/archives/list/aur-general@lists.archlinux.org/message/YPJ3FQYJTJXXY3RUXCYLMHUKHLIUNVFF/"
-              echo "Forum: https://bbs.archlinux.org/viewtopic.php?pid=2306487"
-              exit 1
-            fi
-            sleep "$AUR_RETRY_SLEEP"
-            attempt=$((attempt + 1))
-          done
-
-          # 2. Clone AUR repo (retry — write can flap)
+          # 2. Clone AUR repo
           rm -rf /tmp/aur-repo
-          attempt=1
-          while [ "$attempt" -le 10 ]; do
-            if git clone ssh://aur@aur.archlinux.org/nativmix.git /tmp/aur-repo; then
-              break
-            fi
-            echo "git clone failed (attempt ${attempt}/10); sleep ${AUR_RETRY_SLEEP}s..."
-            rm -rf /tmp/aur-repo
-            if [ "$attempt" -eq 10 ]; then
-              echo "ERROR: git clone failed after retries"
-              exit 1
-            fi
-            sleep "$AUR_RETRY_SLEEP"
-            attempt=$((attempt + 1))
-          done
+          git clone ssh://aur@aur.archlinux.org/nativmix.git /tmp/aur-repo
 
           # 3. Copy files
           cp packaging/aur/PKGBUILD packaging/aur/nativmix.install /tmp/aur-repo/
@@ -182,24 +133,11 @@ jobs:
 
           sudo chown -R "$USER:$USER" .
 
-          # 5. Config Git and Push (retry push)
+          # 5. Config Git and Push
           git config --global --add safe.directory /tmp/aur-repo
           git config user.name "knoelliX"
           git config user.email "moellix@knoellix.net"
           git add PKGBUILD nativmix.install .SRCINFO
           git commit -m "Update to ${GITHUB_REF_NAME:-v${WANT_VER}} (automatic checksums)" || echo "No changes to commit"
-
-          attempt=1
-          while [ "$attempt" -le 10 ]; do
-            if git push origin master; then
-              echo "AUR push succeeded."
-              exit 0
-            fi
-            echo "git push failed (attempt ${attempt}/10); sleep ${AUR_RETRY_SLEEP}s..."
-            if [ "$attempt" -eq 10 ]; then
-              echo "ERROR: git push failed after retries"
-              exit 1
-            fi
-            sleep "$AUR_RETRY_SLEEP"
-            attempt=$((attempt + 1))
-          done
+          git push origin master
+          echo "AUR push succeeded."
