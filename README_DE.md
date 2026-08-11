@@ -71,12 +71,17 @@ NativMix ist ein hardwaregestützter Lautstärkemixer für Linux, entwickelt mit
 paru -S nativmix
 ```
 
-> **AUR vorübergehend gesperrt:** Arch hat Community-AUR-Pushes deaktiviert (Malware-/Adoption-Vorfall, [aur-general](https://lists.archlinux.org/archives/list/aur-general@lists.archlinux.org/message/YPJ3FQYJTJXXY3RUXCYLMHUKHLIUNVFF/)). Neue Releases (z. B. **v1.0.16**) sind auf GitHub/OBS, erscheinen aber ggf. noch nicht im AUR. Bis Uploads wieder gehen, aus dem Repo bauen:
+> **AUR vorübergehend gesperrt:** Arch hat Community-AUR-Pushes deaktiviert (Malware-/Adoption-Vorfall, [aur-general](https://lists.archlinux.org/archives/list/aur-general@lists.archlinux.org/message/YPJ3FQYJTJXXY3RUXCYLMHUKHLIUNVFF/)). Neue Releases (z. B. **v1.0.16**) sind auf GitHub/OBS, erscheinen aber ggf. noch nicht im AUR. Bis Uploads wieder gehen, vom Release-Tag bauen:
 
 ```bash
+sudo pacman -S --needed base-devel pacman-contrib
 git clone --depth 1 --branch v1.0.16 https://github.com/knoellix/NativMix.git
-cd NativMix/packaging/aur && makepkg -si
+cd NativMix/packaging/aur
+updpkgsums
+makepkg -si
 ```
+
+(`updpkgsums` aktualisiert `sha256sums`, falls im Tag noch der Platzhalter `0` steht.)
 
 ---
 

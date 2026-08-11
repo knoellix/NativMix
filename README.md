@@ -69,12 +69,17 @@ NativMix is a hardware-based volume mixer for Linux, built with PyQt6. It connec
 paru -S nativmix
 ```
 
-> **AUR temporarily frozen:** Arch has disabled community AUR pushes while handling a malware/adoption incident ([aur-general notice](https://lists.archlinux.org/archives/list/aur-general@lists.archlinux.org/message/YPJ3FQYJTJXXY3RUXCYLMHUKHLIUNVFF/)). New releases (e.g. **v1.0.16**) are on GitHub/OBS but may not appear on the AUR yet. Until uploads work again, build from the repo:
+> **AUR temporarily frozen:** Arch has disabled community AUR pushes while handling a malware/adoption incident ([aur-general notice](https://lists.archlinux.org/archives/list/aur-general@lists.archlinux.org/message/YPJ3FQYJTJXXY3RUXCYLMHUKHLIUNVFF/)). New releases (e.g. **v1.0.16**) are on GitHub/OBS but may not appear on the AUR yet. Until uploads work again, build from the tagged release:
 
 ```bash
+sudo pacman -S --needed base-devel pacman-contrib
 git clone --depth 1 --branch v1.0.16 https://github.com/knoellix/NativMix.git
-cd NativMix/packaging/aur && makepkg -si
+cd NativMix/packaging/aur
+updpkgsums
+makepkg -si
 ```
+
+(`updpkgsums` refreshes `sha256sums` if the tag still has a placeholder `0`.)
 
 [![OBS Build Status](https://build.opensuse.org/projects/home:knoelliX/packages/nativmix/badge.svg)](https://software.opensuse.org/download.html?project=home%3AknoelliX&package=nativmix)
 
