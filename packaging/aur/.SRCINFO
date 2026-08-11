@@ -23,6 +23,6 @@ pkgbase = nativmix
 	provides = nativmix
 	conflicts = nativmix-git
 	source = nativmix-1.0.16.tar.gz::https://github.com/knoelliX/NativMix/archive/refs/tags/v1.0.16.tar.gz
-	sha256sums = 0
+	sha256sums = 6b54eec812847bd8db4a38b345766c1bc1350b4bf2b067d65323622169e13530
 
 pkgname = nativmix
