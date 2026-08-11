@@ -1,5 +1,5 @@
 Name:           nativmix
-Version:        1.0.15
+Version:        1.0.16
 Release:        0
 Summary:        Hardware-based PipeWire volume & MIDI mixer for Wayland/X11
 License:        GPL-3.0-or-later
@@ -145,6 +145,8 @@ fi
 %doc README.md
 
 %changelog
+* Tue Aug 11 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.16-1
+- Fix: release Arduino USB serial before system suspend (logind PrepareForSleep) so xHCI is not held busy; reconnect after resume
 * Sat Aug 08 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.15-1
 - Fix: V-Sink routing for native PipeWire apps (e.g. Strawberry) — include media.name/node.name in stream name fallback so streams are not left as Unknown in the wrong sink
 * Fri May 30 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.14-1

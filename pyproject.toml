@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nativmix"
-version = "1.0.15"
+version = "1.0.16"
 description = "A hardware-assisted volume mixer for PipeWire/PulseAudio (Linux) and WASAPI (Winndoof)"
 readme = "README.md"
 license = "GPL-3.0-or-later"

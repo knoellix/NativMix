@@ -478,6 +478,8 @@ def main() -> None:
     from nativmix.hardware.midi import MidiThread
     from nativmix.utils.config_manager import ConfigManager
     from nativmix.utils.profile_manager import ProfileManager
+    from nativmix.utils.qt_utils import _slot_guard
+    from nativmix.utils.sleep_watcher import SleepWatcher
 
     # ── One-time config directory migration (NativMix → nativmix) ──────
     migrate_legacy_config_dir()
@@ -872,6 +874,21 @@ def main() -> None:
     arduino.start()
     midi.start()
 
+    # Close Arduino serial before suspend so xHCI is not held busy; reconnect after.
+    sleep_watcher = SleepWatcher(parent=app)
+
+    @_slot_guard
+    def _on_preparing_for_sleep() -> None:
+        arduino.prepare_for_sleep()
+
+    @_slot_guard
+    def _on_resumed_from_sleep() -> None:
+        arduino.resume_from_sleep()
+
+    sleep_watcher.preparing_for_sleep.connect(_on_preparing_for_sleep)
+    sleep_watcher.resumed_from_sleep.connect(_on_resumed_from_sleep)
+    sleep_watcher.start()
+
     # ── IPC Server ──
     ipc_server = IpcServer(parent=app)
     ipc_server.toggle_mute_requested.connect(backend.toggle_mute)
@@ -1035,6 +1052,7 @@ def main() -> None:
     _exit_watchdog.daemon = True
     _exit_watchdog.start()
 
+    sleep_watcher.stop()
     arduino.stop()
     midi.stop()
     backend.stop()

@@ -84,6 +84,10 @@ paru -S nativmix
 
 ## Update History
 
+**v1.0.16**
+
+- Fix: Release Arduino USB serial before system suspend so xHCI is not held busy; reconnect after resume
+
 **v1.0.15**
 
 - Fix: V-Sink routing for native PipeWire apps (e.g. Strawberry) — `media.name`/`node.name` included in stream name fallback so streams land in the correct sink

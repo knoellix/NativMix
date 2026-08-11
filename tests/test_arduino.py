@@ -36,3 +36,34 @@ def test_malformed_channel_count_candidate_does_not_reset_channels():
 
     assert thread._num_channels == 2
     assert len(thread._channels) == 2
+
+
+def test_prepare_for_sleep_blocks_session_until_resume():
+    thread = ArduinoThread(num_channels=2)
+    assert thread._system_sleeping is False
+
+    thread.prepare_for_sleep()
+    assert thread._system_sleeping is True
+
+    # Gate used by run() / _run_session must stay closed
+    assert thread._system_sleeping
+
+    thread.resume_from_sleep()
+    assert thread._system_sleeping is False
+
+
+def test_prepare_for_sleep_closes_active_serial_handle():
+    thread = ArduinoThread(num_channels=2)
+
+    class _FakeSer:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake = _FakeSer()
+    thread._active_ser = fake  # type: ignore[assignment]
+    thread.prepare_for_sleep()
+    assert fake.closed is True
+    assert thread._system_sleeping is True

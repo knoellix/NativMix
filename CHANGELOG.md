@@ -2,6 +2,10 @@
 
 All notable changes to NativMix are documented in this file.
 
+## v1.0.16
+
+- Fix: Release Arduino USB serial before system suspend (`logind` `PrepareForSleep`) so the xHCI controller is not kept busy; reconnect after resume (suspend could fail while NativMix held `/dev/ttyACM*` open)
+
 ## v1.0.15
 
 - Fix: V-Sink routing for native PipeWire clients (e.g. Strawberry) that omit `application.name` / binary — stream name fallback now includes `media.name` and `node.name`, so apps are routed to the correct V-Sink instead of staying as `Unknown` in the wrong sink
