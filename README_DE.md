@@ -52,6 +52,7 @@ NativMix ist ein hardwaregestützter Lautstärkemixer für Linux, entwickelt mit
 | **KDE Plasma**   | ✅ Stabil | Wayland + X11, täglich genutzt                                                                                                                                                                         |
 | **COSMIC**       | ✅ Stabil | Getestet auf Pop!_OS                                                                                                                                                                                   |
 | **GNOME**        | ✅ Stabil | Wayland — stockende Systemlautstärke über NativMix gemeldet und in v1.0.14 behoben ([#19](https://github.com/knoellix/NativMix/issues/19), danke [@AdityaHebballe](https://github.com/AdityaHebballe)) |
+| **Hyprland**     | ✅ Stabil | Wayland — Community-bestätigt unter Arch; Suspend mit Arduino in v1.0.16 behoben ([#27](https://github.com/knoellix/NativMix/issues/27), danke [@clombt](https://github.com/clombt))                   |
 
 
 > **Fedora — Feedback willkommen!** Fedora nutzt portmidi statt rtmidi — der virtuelle MIDI-Port ist dort nicht verfügbar.

@@ -52,6 +52,7 @@ NativMix is a hardware-based volume mixer for Linux, built with PyQt6. It connec
 | **KDE Plasma**      | ✅ Stable | Wayland + X11, daily driver                                                                                                                                                                      |
 | **COSMIC**          | ✅ Stable | Tested on Pop!_OS                                                                                                                                                                                |
 | **GNOME**           | ✅ Stable | Wayland — sluggish system volume via NativMix reported and fixed in v1.0.14 ([#19](https://github.com/knoellix/NativMix/issues/19), thanks [@AdityaHebballe](https://github.com/AdityaHebballe)) |
+| **Hyprland**        | ✅ Stable | Wayland — community-confirmed on Arch; suspend with Arduino fixed in v1.0.16 ([#27](https://github.com/knoellix/NativMix/issues/27), thanks [@clombt](https://github.com/clombt))               |
 
 
 > **Fedora — feedback welcome!** Fedora uses portmidi instead of rtmidi — the virtual MIDI port is not available there.
