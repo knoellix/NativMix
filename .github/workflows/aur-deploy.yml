@@ -1,11 +1,9 @@
 name: AUR Deploy
 
-# Manual only while Arch has AUR pushes disabled for community accounts.
-# Re-enable tag/schedule triggers after Arch reopens writes:
-# https://lists.archlinux.org/archives/list/aur-general@lists.archlinux.org/message/YPJ3FQYJTJXXY3RUXCYLMHUKHLIUNVFF/
-# Tracking: https://github.com/knoellix/NativMix/issues/24
-
 on:
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
