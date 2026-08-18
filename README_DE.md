@@ -83,6 +83,11 @@ paru -S nativmix
 
 ## Update-Verlauf
 
+**v1.0.17**
+
+- Fix: V-Sink-Loopback mit explizitem Hardware-`sink=` — beendet WirePlumber-Retry-Schleife, die Twitch/V-Sink-Audio beim Zocken stumm machte oder stottern ließ
+- Fix: Erwarteter pyserial-`TypeError` beim Serial-Close während Suspend wird nicht mehr als ERROR geloggt
+
 **v1.0.16**
 
 - Fix: Arduino-USB-Serial vor System-Suspend freigeben, damit xHCI nicht blockiert; nach Resume wieder verbinden

@@ -2,6 +2,11 @@
 
 All notable changes to NativMix are documented in this file.
 
+## v1.0.17
+
+- Fix: V-Sink loopback modules now pass explicit `sink=` to the hardware output — WirePlumber no longer retries `No input node for loopback-*` and breaks Twitch/game audio routing; stale loopbacks without `sink=` are reloaded on audit/hotplug
+- Fix: Treat serial close during `PrepareForSleep` as expected (no ERROR traceback from pyserial `TypeError` mid-`readline`)
+
 ## v1.0.16
 
 - Fix: Release Arduino USB serial before system suspend (`logind` `PrepareForSleep`) so the xHCI controller is not kept busy; reconnect after resume (suspend could fail while NativMix held `/dev/ttyACM*` open)

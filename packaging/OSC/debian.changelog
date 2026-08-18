@@ -1,3 +1,13 @@
+nativmix (1.0.17) unstable; urgency=medium
+
+  * Fix: V-Sink loopback passes explicit sink= to hardware output — stops
+    WirePlumber retry loop (No input node for loopback-*) that broke V-Sink
+    and Twitch audio during gaming; stale loopbacks are reloaded on audit/hotplug
+  * Fix: quiet expected TypeError when Arduino serial is closed mid-readline
+    during PrepareForSleep
+
+ -- Christian Möllmann <moellix@knoellix.net>  Tue, 18 Aug 2026 16:30:00 +0200
+
 nativmix (1.0.16) unstable; urgency=medium
 
   * Fix: release Arduino USB serial before system suspend (logind PrepareForSleep) so xHCI is not held busy; reconnect after resume

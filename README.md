@@ -85,6 +85,11 @@ paru -S nativmix
 
 ## Update History
 
+**v1.0.17**
+
+- Fix: V-Sink loopback passes explicit hardware `sink=` — stops WirePlumber retry loop that silenced/stuttered Twitch and other V-Sink apps during gaming
+- Fix: Quiet expected pyserial `TypeError` when Arduino serial closes mid-read during system suspend
+
 **v1.0.16**
 
 - Fix: Release Arduino USB serial before system suspend so xHCI is not held busy; reconnect after resume

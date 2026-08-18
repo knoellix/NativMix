@@ -449,6 +449,14 @@ class ArduinoThread(QThread):
                 self._run_session(port)
 
             except Exception:
+                if self._system_sleeping:
+                    # Expected when prepare_for_sleep() closes the port mid-readline
+                    logger.debug(
+                        "ArduinoThread: interrupted for system sleep",
+                        exc_info=True,
+                    )
+                    self.connection_changed.emit(False)
+                    continue
                 logger.exception("Unexpected ArduinoThread error — retrying in %.0fs", RECONNECT_INTERVAL)
                 self.connection_changed.emit(False)
                 self._wait_or_stop(RECONNECT_INTERVAL)
@@ -576,6 +584,14 @@ class ArduinoThread(QThread):
                 # Brief pause so we don't spin-lock if the device keeps failing
                 self._wait_or_stop(RECONNECT_INTERVAL)
 
+        except (TypeError, ValueError) as exc:
+            # Defensive: same cross-thread close race if it escapes _read_line
+            if self._system_sleeping or not self._running:
+                logger.debug("Serial close race on %s: %s", port, exc)
+                self.connection_changed.emit(False)
+            else:
+                raise
+
         except OSError as exc:
             # Covers permission errors, missing device nodes, etc.
             if self._system_sleeping:
@@ -608,6 +624,13 @@ class ArduinoThread(QThread):
         except serial.SerialException as exc:
             # Re-raise so _run_session can handle reconnect logic
             raise exc
+        except (TypeError, ValueError, OSError) as exc:
+            # Closing the port from another thread (prepare_for_sleep / stop)
+            # can leave pyserial with fd=None; readline then raises TypeError
+            # instead of SerialException.
+            if self._system_sleeping or not self._running:
+                raise serial.SerialException(str(exc)) from exc
+            raise
 
         if not raw_bytes:
             # Timeout expired – no data received, loop again

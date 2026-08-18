@@ -67,3 +67,20 @@ def test_prepare_for_sleep_closes_active_serial_handle():
     thread.prepare_for_sleep()
     assert fake.closed is True
     assert thread._system_sleeping is True
+
+
+def test_read_line_wraps_typeerror_as_serial_exception_while_sleeping():
+    thread = ArduinoThread(num_channels=2)
+    thread._system_sleeping = True
+
+    class _BrokenSer:
+        def readline(self):
+            raise TypeError("'NoneType' object cannot be interpreted as an integer")
+
+    import serial as serial_mod
+
+    try:
+        thread._read_line(_BrokenSer())  # type: ignore[arg-type]
+        assert False, "expected SerialException"
+    except serial_mod.SerialException:
+        pass

@@ -20,6 +20,39 @@ _pw_dump_cache: tuple[float, str] | None = None  # (timestamp, stdout)
 _PW_DUMP_CACHE_TTL = 0.5  # seconds
 
 
+def build_loopback_load_args(vsink_monitor: str, hw_sink: str) -> list[str]:
+    """
+    pactl load-module arguments for a NativMix V-Sink monitor → hardware sink loopback.
+
+    Explicit ``sink=`` tells WirePlumber's Pulse adapter where playback belongs so it
+    stops retrying ``No input node for loopback-*`` when ``dont-link=1`` is set.
+    """
+    return [
+        "module-loopback",
+        f"source={vsink_monitor}",
+        f"sink={hw_sink}",
+        "dont-link=1",
+    ]
+
+
+def loopback_module_targets_hardware(
+    module_argument: str,
+    vsink_name: str,
+    hw_sink: str,
+) -> bool:
+    """Return True if an existing loopback module already routes to ``hw_sink``."""
+    return (
+        f"source={vsink_name}.monitor" in module_argument
+        and f"sink={hw_sink}" in module_argument
+    )
+
+
+def invalidate_pw_dump_cache() -> None:
+    """Drop cached pw-dump output after graph changes (loopback reload, etc.)."""
+    global _pw_dump_cache
+    _pw_dump_cache = None
+
+
 def _get_pw_dump() -> str:
     """Run pw-dump and cache the result for 500 ms."""
     global _pw_dump_cache
