@@ -1,0 +1,62 @@
+app-id: net.knoellix.NativMix
+runtime: org.kde.Platform
+runtime-version: "6.8"
+sdk: org.kde.Sdk
+command: nativmix
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  - --filesystem=xdg-run/pipewire-0
+  - --device=all
+  - --talk-name=org.freedesktop.Notifications
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.portal.Desktop
+  - --system-talk-name=org.freedesktop.login1
+  - --filesystem=home/.config/nativmix:create
+  - --filesystem=home/.cache/nativmix:create
+  - --filesystem=xdg-config/autostart:create
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/pkgconfig
+  - /share/man
+
+modules:
+  - name: krb5
+    buildsystem: autotools
+    subdir: src
+    config-opts:
+      - --disable-static
+      - --without-system-verto
+    sources:
+      - type: archive
+        url: https://kerberos.org/dist/krb5/1.21/krb5-1.21.3.tar.gz
+        sha256: b7a4cd5ead67fb08b980b21abd150ff7217e85ea320c9ed0c6dadd304840ad35
+
+  - python3-deps.json
+  - name: nativmix
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-build-isolation --no-deps --prefix=/app .
+      - install -Dm644 flatpak/net.knoellix.NativMix.metainfo.xml /app/share/metainfo/net.knoellix.NativMix.metainfo.xml
+      - install -Dm644 flatpak/net.knoellix.NativMix.desktop /app/share/applications/net.knoellix.NativMix.desktop
+      - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/net.knoellix.NativMix.png
+      - install -Dm644 assets/icon.svg /app/share/icons/hicolor/scalable/apps/net.knoellix.NativMix.svg
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - .git
+          - .flatpak-builder
+          - build-flatpak
+          - repo
+          - .venv
+          - __pycache__
+          - .mypy_cache
+          - .pytest_cache
+          - .ruff_cache
+          - .tmp

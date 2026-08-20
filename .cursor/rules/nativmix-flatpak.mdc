@@ -1,0 +1,45 @@
+---
+description: NativMix Flatpak packaging, sandbox, and appearance constraints
+alwaysApply: true
+---
+
+# NativMix Flatpak
+
+## Role
+Flatpak is the **portable fallback** when no native package fits. Native installs (AUR, OBS) stay preferred.
+
+- App-ID: `net.knoellix.NativMix`
+- Manifest: `flatpak/net.knoellix.NativMix.yml`
+- Python deps: `flatpak/python3-deps.json` (PyQt6 wheels, no PyQt BaseApp)
+- Build docs: `packaging/FLATPAK.md`
+- Wiki: `EN-Flatpak.md` / `DE-Flatpak.md` (separate wiki repo)
+
+## Build constraints
+- Run `flatpak-builder` on a **native Linux filesystem** (e.g. `$HOME/.cache/nativmix-flatpak/`).
+- Repos on NTFS/exFAT under `/mnt/...` break `fchownat` unless build + `--state-dir` are in `$HOME`.
+- Runtime: `org.kde.Platform//6.8` + `org.kde.Sdk//6.8` from Flathub.
+- Do **not** reintroduce `com.riverbankcomputing.PyQt.BaseApp` unless explicitly validated — it failed `fchownat` on maintainer hardware.
+- Bundle `krb5` module for `libgssapi_krb5.so.2` (QtNetwork dependency).
+
+## Sandbox (phase 1 — permissive for hardware validation)
+- `--socket=pulseaudio`, `--filesystem=xdg-run/pipewire-0`
+- `--device=all` for Arduino serial (`/dev/ttyACM*`) — tighten only after stable baseline
+- Portal talk: `org.freedesktop.portal.Desktop` (theme + future autostart)
+- Config/cache: `~/.config/nativmix`, `~/.cache/nativmix`
+
+## Appearance (differs from native)
+- Flatpak does **not** use native Qt themes (Breeze, Kvantum, GNOME styling).
+- Sandbox Qt typically exposes only **Fusion**; NativMix applies a **dedicated light/dark palette** with cool-blue accent.
+- **Light vs dark** follows XDG portal `org.freedesktop.appearance color-scheme` at startup and on live changes (`ThemeWatcher` in `lib/nativmix/gui/theme.py`).
+- On native installs with a real desktop style, **do not override** the palette — only Fusion triggers fallback in `main.py`.
+
+## Autostart split (planned)
+- **Host:** keep existing `~/.config/autostart/` / systemd path unchanged.
+- **Flatpak:** portal-based autostart (`org.freedesktop.portal.Background`) via `lib/nativmix/utils/portal_autostart.py`.
+- D-Bus `a{sv}`: native scalars (Qt wraps once); `commandline` as typed `as` (`nativmix --hidden`) — no double-wrapped `QDBusVariant`.
+- Manifest needs `--filesystem=xdg-config/autostart:create` so the UI can detect the portal-created host desktop file.
+- If the Background portal is missing, Settings shows a clear warning instead of failing silently.
+
+## Verification
+- Maintainer validates Flatpak **after local rebuild/install**, same as `makepkg -si` for native.
+- Do not push/release Flatpak docs or manifest changes until hardware smoke test passes (Arduino, V-Sink, MIDI, theme readability).

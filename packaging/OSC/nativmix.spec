@@ -1,5 +1,5 @@
 Name:           nativmix
-Version:        1.0.17
+Version:        1.0.18
 Release:        0
 Summary:        Hardware-based PipeWire volume & MIDI mixer for Wayland/X11
 License:        GPL-3.0-or-later
@@ -145,6 +145,9 @@ fi
 %doc README.md
 
 %changelog
+* Wed Aug 19 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.18-1
+- Flatpak: stabilize theming baseline by using a controlled light/dark fallback path in sandboxed runtime
+- Flatpak: improve tooltip readability and startup theme consistency under Fusion-only style availability
 * Tue Aug 18 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.17-1
 - Fix: V-Sink loopback passes explicit sink= to hardware output — stops WirePlumber retry loop (No input node for loopback-*) that broke V-Sink/Twitch audio during gaming
 - Fix: quiet expected TypeError when Arduino serial is closed mid-readline during PrepareForSleep

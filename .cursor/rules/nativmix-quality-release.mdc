@@ -16,9 +16,31 @@ alwaysApply: true
 - Do not use `/tmp/` paths.
 
 ## Packaging and releases
-- Only the user runs hardware tests and installation (`makepkg`).
+- Only the user runs hardware tests and installation (`makepkg` and/or local Flatpak rebuild).
 - Never bump versions without explicit user instruction.
-- On approved version bump, update all 8 locations together:
-  `pyproject.toml`, `metadata.py`, `PKGBUILD`, `spec`, `_service`, both `README`s, and changelog entry in `spec`.
+
+### Single release version (no exceptions)
+- Source of truth: `lib/nativmix/metadata.py` (`__version__`).
+- After an approved bump, **every** file in this repo that embeds a concrete release number must show that same version. “Everywhere” means AUR, OBS, Flatpak, local scripts, CI, Windows packaging, READMEs, changelogs — not only the paths you touched today.
+- Do not leave older numbers behind “because that path is unused / legacy”. If a packaging file still carries an older concrete `1.0.x`, the bump is incomplete.
+- **`Version: 0` is OBS-only:** Allowed solely as an OBS/`set_version` placeholder in RPM templates (e.g. some fedora/suse specs). The OBS git tag / `_service` revision must still be `v<same as metadata.py>`.
+- **Never in local builds:** Local `makepkg`, Flatpak rebuild, `build_local.sh`, Windows packaging, and any manual/CI local package must always build and install the real version from `metadata.py` / `pyproject.toml` — never ship or test as `0`. Local scripts that start from a `Version: 0` template must inject the real version before `rpmbuild` (as fedora/suse `build_local.sh` already do).
+- Verification before calling a bump done: search the repo for the **previous** version string; zero hits outside intentional historical changelog entries.
+
+### Bump checklist (update in one change)
+- `lib/nativmix/metadata.py`
+- `pyproject.toml`
+- `packaging/aur/PKGBUILD` + `packaging/aur/.SRCINFO`
+- `packaging/aur/PKGBUILD.local` (local makepkg helper — must not lag; prefer reading `pkgver` from `pyproject.toml`)
+- `packaging/OSC/nativmix.spec` + `packaging/OSC/_service` + `packaging/OSC/debian.changelog`
+- `packaging/fedora/nativmix.spec` / `packaging/suse/nativmix.spec` (`0` only if OBS placeholder; local scripts must inject real version)
+- `packaging/debian/changelog` (and related debian packaging if still shipped)
+- Root `.SRCINFO` if it exists (must not lag)
+- `flatpak/net.knoellix.NativMix.metainfo.xml` release entry when used
+- `CHANGELOG.md`, `README.md`, `README_DE.md`
+
+### Other packaging notes
+- Keep wiki/README Flatpak notes in sync when packaging docs change.
+- Flatpak manifest lives in `flatpak/`; build instructions in `packaging/FLATPAK.md`.
 - Escape OBS/RPM macros in comments using `%%`.
 - Use `fdupes` as required by packaging flow.

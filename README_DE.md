@@ -72,6 +72,28 @@ NativMix ist ein hardwaregestützter Lautstärkemixer für Linux, entwickelt mit
 paru -S nativmix
 ```
 
+### Flatpak (portabler Fallback)
+
+NativMix gibt es auch als Flatpak (`net.knoellix.NativMix`). Damit laufen PipeWire/PulseAudio, MIDI und Arduino/USB in der Sandbox.
+
+Flatpak lohnt sich, wenn:
+
+- es für deine Distribution kein passendes natives Paket gibt,
+- native Abhängigkeiten bei dir schwer auflösbar sind, oder
+- du Flatpak grundsätzlich bevorzugst.
+
+Wenn ein natives Paket verfügbar ist (AUR, OBS, …), bleibt das der bevorzugte Weg. Flatpak ist die portable Alternative — besonders auf immutable oder exotischen Setups.
+
+**Voraussetzungen:** Linux mit PipeWire oder PulseAudio; für Hardware-Regler muss der Host-Zugriff auf Serial-Geräte (z. B. `/dev/ttyACM*`) funktionieren.
+
+Auf Flathub ist NativMix noch nicht veröffentlicht. Lokal bauen und installieren aus diesem Repository — siehe [packaging/FLATPAK.md](https://github.com/knoelliX/NativMix/blob/main/packaging/FLATPAK.md) oder die [Flatpak-Wiki-Seite](https://github.com/knoelliX/NativMix/wiki/DE-Flatpak).
+
+**Erscheinungsbild:** Im Flatpak gibt es kein natives Desktop-Theme — nur eine eigene Hell/Dunkel-Palette über das XDG-Portal (auch bei Live-Wechsel). Autostart im Flatpak läuft über das Background-Portal; native Installationen behalten `~/.config/autostart/` / systemd.
+
+```bash
+flatpak run net.knoellix.NativMix
+```
+
 ---
 
 ## Dokumentation
@@ -82,6 +104,11 @@ paru -S nativmix
 ---
 
 ## Update-Verlauf
+
+**v1.0.18**
+
+- Flatpak: Manifest/Doku, Fusion Hell/Dunkel via Portal, Portal-Autostart
+- Fix: Channel-Mute (und spätes Volume/Routing) beim Stream-Auftauchen, inkl. Other Apps (#29)
 
 **v1.0.17**
 

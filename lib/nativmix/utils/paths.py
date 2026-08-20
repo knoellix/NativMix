@@ -28,12 +28,14 @@ logger = logging.getLogger(__name__)
 # Path Resolution (Dynamic & Robust)
 # ---------------------------------------------------------------------------
 
+
 def get_app_root() -> Path:
     """
     Determine the application root directory dynamically.
     Works for local development, installed environments, and PyInstaller bundles.
     """
     import sys
+
     # PyInstaller sets sys.frozen and sys._MEIPASS to the extraction dir.
     # Assets are bundled relative to _MEIPASS, so that IS the root.
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -46,6 +48,7 @@ def get_app_root() -> Path:
         return current_file.parent.parent.parent.parent
     # Fallback to current working directory if resolution fails
     return Path(os.getcwd())
+
 
 def get_assets_dir() -> Path:
     """
@@ -74,16 +77,16 @@ def get_assets_dir() -> Path:
         return prog / "NativMix" / "assets"
     return Path("/usr/share/nativmix/assets")
 
+
 # On Windows there is no /usr/share — set to None so get_icon_path() skips it.
-_SYSTEM_ASSETS: Path | None = (
-    None if platform.system() == "Windows" else Path("/usr/share/nativmix/assets")
-)
+_SYSTEM_ASSETS: Path | None = None if platform.system() == "Windows" else Path("/usr/share/nativmix/assets")
 _LOCAL_ASSETS: Path = get_assets_dir()
 
 
 # ---------------------------------------------------------------------------
 # OS Detection
 # ---------------------------------------------------------------------------
+
 
 @lru_cache(maxsize=1)
 def _read_os_release() -> dict[str, str]:
@@ -129,9 +132,9 @@ def get_platform() -> str:
         return "other"
 
     os_release = _read_os_release()
-    os_id      = os_release.get("ID", "").lower()
-    id_like    = os_release.get("ID_LIKE", "").lower()
-    name       = os_release.get("NAME", "").lower()
+    os_id = os_release.get("ID", "").lower()
+    id_like = os_release.get("ID_LIKE", "").lower()
+    name = os_release.get("NAME", "").lower()
 
     # SteamOS check first (it's Arch-based but needs special treatment)
     if "steamos" in name or "steam" in os_id:
@@ -142,19 +145,31 @@ def get_platform() -> str:
         return "arch"
 
     # Debian-family detection
-    debian_ids = {"debian", "ubuntu", "linuxmint", "pop", "raspbian", "kali",
-                  "elementary", "zorin", "mx", "neon"}
+    debian_ids = {"debian", "ubuntu", "linuxmint", "pop", "raspbian", "kali", "elementary", "zorin", "mx", "neon"}
     if os_id in debian_ids or "debian" in id_like.split() or "ubuntu" in id_like.split():
         return "debian"
 
     return "linux"
 
 
-def is_arch()    -> bool: return get_platform() == "arch"
-def is_debian()  -> bool: return get_platform() == "debian"
-def is_steamos() -> bool: return get_platform() == "steamos"
-def is_windows() -> bool: return get_platform() == "windows"
+def is_arch() -> bool:
+    return get_platform() == "arch"
+
+
+def is_debian() -> bool:
+    return get_platform() == "debian"
+
+
+def is_steamos() -> bool:
+    return get_platform() == "steamos"
+
+
+def is_windows() -> bool:
+    return get_platform() == "windows"
+
+
 SERVICE_UNIT = "app-nativmix.service"
+
 
 def is_systemd_service() -> bool:
     """Return True when running as the app-nativmix.service systemd unit.
@@ -169,12 +184,27 @@ def is_systemd_service() -> bool:
         return SERVICE_UNIT in cgroup
     except OSError:
         return False
-def is_linux()   -> bool: return get_platform() in ("arch", "debian", "steamos", "linux")
+
+
+def is_linux() -> bool:
+    return get_platform() in ("arch", "debian", "steamos", "linux")
+
+
+def is_flatpak() -> bool:
+    """Return True when running inside a Flatpak sandbox.
+
+    Prefers the Flatpak-provided ``FLATPAK_ID`` environment variable and falls
+    back to the sandbox marker file ``/.flatpak-info``.
+    """
+    if os.environ.get("FLATPAK_ID"):
+        return True
+    return Path("/.flatpak-info").is_file()
 
 
 # ---------------------------------------------------------------------------
 # Directory helpers
 # ---------------------------------------------------------------------------
+
 
 def get_config_dir() -> Path:
     """
@@ -254,7 +284,7 @@ def get_autostart_dir() -> Path:
     Windows                →  not applicable (returns empty Path)
     """
     if is_windows():
-        return Path()   # autostart is handled via the Windows registry elsewhere
+        return Path()  # autostart is handled via the Windows registry elsewhere
     return Path.home() / ".config" / "autostart"
 
 
@@ -268,6 +298,7 @@ def get_ipc_socket_path() -> str:
         # Named pipe name (no path prefix — QLocalServer adds \\.\pipe\ automatically).
         # Include the username so multiple Windows users on the same machine get separate pipes.
         import getpass
+
         try:
             _user = getpass.getuser().replace(" ", "_")
         except Exception:
@@ -282,6 +313,7 @@ def get_ipc_socket_path() -> str:
 # ---------------------------------------------------------------------------
 # Asset / icon resolution
 # ---------------------------------------------------------------------------
+
 
 def get_asset_path(filename: str) -> Path:
     """Return the absolute path to a named asset file."""
@@ -311,6 +343,7 @@ def get_icon_path() -> Path | None:
 # One-time config directory migration
 # ---------------------------------------------------------------------------
 
+
 def migrate_legacy_config_dir() -> None:
     """
     One-time migration: move ~/.config/NativMix → ~/.config/nativmix.
@@ -323,7 +356,7 @@ def migrate_legacy_config_dir() -> None:
     Safe on case-insensitive filesystems (Windows/macOS): the resolved-path
     equality check ensures we never copy a directory onto itself.
     """
-    canonical = get_config_dir()            # e.g. ~/.config/nativmix
+    canonical = get_config_dir()  # e.g. ~/.config/nativmix
     legacy = canonical.parent / "NativMix"  # e.g. ~/.config/NativMix
 
     # Nothing to do when the legacy directory is absent or is the same
@@ -355,6 +388,7 @@ def migrate_legacy_config_dir() -> None:
 # ---------------------------------------------------------------------------
 # Startup diagnostics
 # ---------------------------------------------------------------------------
+
 
 def log_platform_info() -> None:
     """Log detected platform and all resolved paths at INFO level."""

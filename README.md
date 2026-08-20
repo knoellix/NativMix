@@ -72,6 +72,28 @@ paru -S nativmix
 
 [![OBS Build Status](https://build.opensuse.org/projects/home:knoelliX/packages/nativmix/badge.svg)](https://software.opensuse.org/download.html?project=home%3AknoelliX&package=nativmix)
 
+### Flatpak (portable fallback)
+
+NativMix is also available as a Flatpak (`net.knoellix.NativMix`). It is fully functional with PipeWire/PulseAudio, MIDI, and Arduino/USB inside the sandbox.
+
+Use Flatpak when:
+
+- your distribution has no suitable native package, or
+- native dependencies are hard to satisfy on your system, or
+- you simply prefer installing apps as Flatpak.
+
+If a native package exists for your distro (AUR, OBS, etc.), that remains the preferred install path. Flatpak is the portable alternative — especially useful on immutable or niche setups.
+
+**Requirements:** Linux with PipeWire or PulseAudio; for hardware faders, host access to serial devices (e.g. `/dev/ttyACM*`) must work on your system.
+
+Flatpak is not published on Flathub yet. Build and install locally from this repository — see [packaging/FLATPAK.md](packaging/FLATPAK.md) or the [Flatpak wiki page](https://github.com/knoelliX/NativMix/wiki/EN-Flatpak).
+
+**Appearance:** The Flatpak does not use your native desktop theme — only a dedicated light/dark palette that follows your system light/dark preference (XDG portal, including live changes). Autostart in Flatpak uses the Background portal; native installs keep `~/.config/autostart/` / systemd.
+
+```bash
+flatpak run net.knoellix.NativMix
+```
+
 ---
 
 ## Documentation
@@ -84,6 +106,11 @@ paru -S nativmix
 ---
 
 ## Update History
+
+**v1.0.18**
+
+- Flatpak: local manifest/docs, Fusion light/dark via portal, portal autostart
+- Fix: restore channel mute (and late volume/routing) when mapped streams appear, including Other Apps (#29)
 
 **v1.0.17**
 

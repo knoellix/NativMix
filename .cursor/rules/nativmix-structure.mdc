@@ -7,8 +7,10 @@ alwaysApply: true
 
 Use this structure as orientation for code placement:
 
-- `lib/nativmix/main.py`: central signal wiring in `main()`.
+- `lib/nativmix/main.py`: central signal wiring in `main()`; Fusion fallback palette + style detection.
 - `lib/nativmix/audio/manager.py`: PipeWire logic (`RLock` protection).
 - `lib/nativmix/hardware/`: Arduino and MIDI worker threads.
-- `lib/nativmix/gui/`: PyQt6 widgets (no business logic).
-- `lib/nativmix/utils/`: config and distro detection helpers.
+- `lib/nativmix/gui/`: PyQt6 widgets (no business logic); `gui/theme.py` = XDG portal `ThemeWatcher`.
+- `lib/nativmix/utils/`: config and distro detection helpers; `proc_resolver.py` includes Flatpak app-ID resolution.
+- `flatpak/`: Flatpak manifest, desktop/metainfo, `python3-deps.json`.
+- `packaging/FLATPAK.md`: local Flatpak build and troubleshooting.

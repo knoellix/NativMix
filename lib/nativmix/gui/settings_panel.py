@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -36,7 +37,7 @@ from PyQt6.QtWidgets import (
 
 from nativmix.utils.paths import SERVICE_UNIT as _SERVICE_UNIT
 from nativmix.utils.paths import get_autostart_dir as _get_autostart_dir
-from nativmix.utils.paths import is_windows
+from nativmix.utils.paths import is_flatpak, is_windows
 from nativmix.utils.qt_utils import _slot_guard
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,8 @@ class _CollapsibleGroup(QGroupBox):
             self._body.setVisible(not self._body.isVisible())
         else:
             super().mousePressEvent(event)
+
+
 _AUTOSTART_FILE = _AUTOSTART_DIR / "nativmix.desktop"
 _PANIC_BTN_QSS = (
     "QPushButton { color: #ff4444; font-weight: bold;"
@@ -74,24 +77,25 @@ _PANIC_BTN_QSS = (
     " QPushButton:hover { background-color: rgba(255, 68, 68, 0.15); color: #ff6666; }"
 )
 _MIDI_STATUS_COLORS = {
-    "stable":          "#44ff44",   # Green
-    "connecting":      "#ffff44",   # Yellow
-    "error_temporary": "#ffaa44",   # Orange
-    "error_critical":  "#ff4444",   # Red
-    "disabled":        "#888888",   # Grey — feature not available (e.g. virtual port on portmidi)
-    "unknown":         "#888888",   # Fallback (neutral grey, visible on both themes)
+    "stable": "#44ff44",  # Green
+    "connecting": "#ffff44",  # Yellow
+    "error_temporary": "#ffaa44",  # Orange
+    "error_critical": "#ff4444",  # Red
+    "disabled": "#888888",  # Grey — feature not available (e.g. virtual port on portmidi)
+    "unknown": "#888888",  # Fallback (neutral grey, visible on both themes)
 }
 
 _BAUD_RATES = [9600, 19200, 38400, 57600, 115200]
 
 # Windows registry key for autostart
-_WIN_RUN_KEY  = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_WIN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 _WIN_APP_NAME = "NativMix"
 
 
 def _is_autostart_enabled_windows() -> bool:
     try:
         import winreg
+
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY)
         winreg.QueryValueEx(key, _WIN_APP_NAME)
         winreg.CloseKey(key)
@@ -104,6 +108,7 @@ def _enable_autostart_windows() -> bool:
     try:
         import shutil
         import winreg
+
         exe = shutil.which("nativmix") or os.path.abspath(__import__("sys").argv[0])
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY, 0, winreg.KEY_SET_VALUE)
         winreg.SetValueEx(key, _WIN_APP_NAME, 0, winreg.REG_SZ, f'"{exe}" --hidden')
@@ -118,6 +123,7 @@ def _enable_autostart_windows() -> bool:
 def _disable_autostart_windows() -> bool:
     try:
         import winreg
+
         key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY, 0, winreg.KEY_SET_VALUE)
         winreg.DeleteValue(key, _WIN_APP_NAME)
         winreg.CloseKey(key)
@@ -135,6 +141,7 @@ def _is_autostart_enabled() -> bool:
 def _enable_autostart() -> bool:
     try:
         from nativmix.utils.paths import get_binary_dir, get_data_dir
+
         _AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
         exec_path = get_binary_dir() / "nativmix"
         # Icon: prefer system-installed path, fall back to XDG data dir
@@ -170,7 +177,8 @@ def _systemd_unit_available() -> bool:
     try:
         r = subprocess.run(
             ["systemctl", "--user", "cat", _SERVICE_UNIT],
-            capture_output=True, timeout=2,
+            capture_output=True,
+            timeout=2,
         )
         return r.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
@@ -181,7 +189,8 @@ def _is_service_enabled() -> bool:
     try:
         r = subprocess.run(
             ["systemctl", "--user", "is-enabled", _SERVICE_UNIT],
-            capture_output=True, timeout=2,
+            capture_output=True,
+            timeout=2,
         )
         return r.stdout.strip() == b"enabled"
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
@@ -192,7 +201,8 @@ def _enable_service() -> bool:
     try:
         r = subprocess.run(
             ["systemctl", "--user", "enable", _SERVICE_UNIT],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         return r.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
@@ -203,7 +213,8 @@ def _disable_service() -> bool:
     try:
         r = subprocess.run(
             ["systemctl", "--user", "disable", _SERVICE_UNIT],
-            capture_output=True, timeout=5,
+            capture_output=True,
+            timeout=5,
         )
         return r.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
@@ -246,12 +257,12 @@ class SettingsPanel(QGroupBox):
     master_refresh_requested = pyqtSignal()
     profile_cc_learn_started = pyqtSignal(str)  # "next", "prev", "direct"
     delete_profile_requested = pyqtSignal(str)  # profile_id to delete
-    save_profile_requested = pyqtSignal()        # save current channel state to active profile
+    save_profile_requested = pyqtSignal()  # save current channel state to active profile
     restore_fader_positions_changed = pyqtSignal(bool)  # toggled on/off
-
 
     def __init__(self, config, connected_port: str | None = None, profile_manager=None, parent=None) -> None:
         from nativmix.metadata import __version__
+
         super().__init__("Settings", parent)
         self._config = config
         self._profile_manager = profile_manager
@@ -348,11 +359,27 @@ class SettingsPanel(QGroupBox):
         top_layout.addSpacing(16)
 
         self._use_windows_autostart: bool = is_windows()
+        self._use_flatpak_autostart: bool = (not self._use_windows_autostart) and is_flatpak()
         self._use_systemd: bool = False
         if self._use_windows_autostart:
             _autostart_on = _is_autostart_enabled_windows()
             _suffix = " (Registry)"
             _tip = "Autostart via Windows registry (HKCU\\...\\Run)."
+        elif self._use_flatpak_autostart:
+            from nativmix.utils.portal_autostart import (
+                is_portal_autostart_enabled,
+                portal_background_available,
+            )
+
+            _autostart_on = is_portal_autostart_enabled()
+            _suffix = " (Flatpak)"
+            if portal_background_available():
+                _tip = "Autostart via XDG Desktop Portal (Flatpak). Starts NativMix hidden to tray at login."
+            else:
+                _tip = (
+                    "Flatpak Background portal unavailable on this desktop. "
+                    "Autostart may need to be set in system settings."
+                )
         else:
             self._use_systemd = _systemd_unit_available()
             if self._use_systemd and _AUTOSTART_FILE.exists():
@@ -365,8 +392,8 @@ class SettingsPanel(QGroupBox):
             _suffix = " (systemd)" if self._use_systemd else ""
             _tip = (
                 "Autostart via systemd user service."
-                if self._use_systemd else
-                "Autostart via XDG (~/.config/autostart/)."
+                if self._use_systemd
+                else "Autostart via XDG (~/.config/autostart/)."
             )
         self._autostart_btn = QPushButton(f"Autostart: {'ON' if _autostart_on else 'OFF'}{_suffix}")
         self._autostart_btn.setCheckable(True)
@@ -386,15 +413,12 @@ class SettingsPanel(QGroupBox):
 
         self._baud_box = QComboBox()
         self._baud_box.setToolTip(
-            "Serial baud rate for the Arduino connection.\n"
-            "Must match the value in your Arduino sketch (default: 9600)."
+            "Serial baud rate for the Arduino connection.\nMust match the value in your Arduino sketch (default: 9600)."
         )
         for rate in _BAUD_RATES:
             self._baud_box.addItem(str(rate), userData=rate)
         _saved_baud = self._config.baud_rate
-        _baud_idx = next(
-            (i for i, r in enumerate(_BAUD_RATES) if r == _saved_baud), 0
-        )
+        _baud_idx = next((i for i, r in enumerate(_BAUD_RATES) if r == _saved_baud), 0)
         self._baud_box.setCurrentIndex(_baud_idx)
         self._baud_box.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         baud_layout.addWidget(self._baud_box)
@@ -434,7 +458,7 @@ class SettingsPanel(QGroupBox):
             fc_layout.addWidget(QLabel("Fader Curve Intensity (Linear to Natural):"))
 
             self._curve_slider = QSlider(Qt.Orientation.Horizontal)
-            self._curve_slider.setRange(100, 300)          # maps to 1.00 – 3.00
+            self._curve_slider.setRange(100, 300)  # maps to 1.00 – 3.00
             self._curve_slider.setSingleStep(1)
             self._curve_slider.setPageStep(10)
             self._curve_slider.setTickInterval(50)
@@ -491,7 +515,6 @@ class SettingsPanel(QGroupBox):
 
             root_layout.addLayout(bottom_layout)
 
-
             # ── Profile section (collapsible) ────────────────────────────────
             profile_group = _CollapsibleGroup("Profile", expanded=False)
             profile_layout = QVBoxLayout(profile_group.body)
@@ -511,12 +534,8 @@ class SettingsPanel(QGroupBox):
             profile_btn_row.setSpacing(4)
 
             self._save_profile_btn = QPushButton("Save Profile")
-            self._save_profile_btn.setToolTip(
-                "Save current channel assignments to the active profile."
-            )
-            self._save_profile_btn.clicked.connect(
-                lambda checked=False: self.save_profile_requested.emit()
-            )
+            self._save_profile_btn.setToolTip("Save current channel assignments to the active profile.")
+            self._save_profile_btn.clicked.connect(lambda checked=False: self.save_profile_requested.emit())
             profile_btn_row.addWidget(self._save_profile_btn)
 
             self._delete_profile_btn = QPushButton("Delete current profile")
@@ -567,24 +586,12 @@ class SettingsPanel(QGroupBox):
             midi_profile_layout.addRow("This profile (direct):", direct_row)
 
             # Connect Learn/Clear buttons
-            self._profile_next_learn_btn.clicked.connect(
-                lambda checked=False: self._start_profile_cc_learn("next")
-            )
-            self._profile_prev_learn_btn.clicked.connect(
-                lambda checked=False: self._start_profile_cc_learn("prev")
-            )
-            self._profile_direct_learn_btn.clicked.connect(
-                lambda checked=False: self._start_profile_cc_learn("direct")
-            )
-            self._profile_next_clear_btn.clicked.connect(
-                lambda checked=False: self._clear_profile_cc("next")
-            )
-            self._profile_prev_clear_btn.clicked.connect(
-                lambda checked=False: self._clear_profile_cc("prev")
-            )
-            self._profile_direct_clear_btn.clicked.connect(
-                lambda checked=False: self._clear_profile_cc("direct")
-            )
+            self._profile_next_learn_btn.clicked.connect(lambda checked=False: self._start_profile_cc_learn("next"))
+            self._profile_prev_learn_btn.clicked.connect(lambda checked=False: self._start_profile_cc_learn("prev"))
+            self._profile_direct_learn_btn.clicked.connect(lambda checked=False: self._start_profile_cc_learn("direct"))
+            self._profile_next_clear_btn.clicked.connect(lambda checked=False: self._clear_profile_cc("next"))
+            self._profile_prev_clear_btn.clicked.connect(lambda checked=False: self._clear_profile_cc("prev"))
+            self._profile_direct_clear_btn.clicked.connect(lambda checked=False: self._clear_profile_cc("direct"))
 
             profile_layout.addWidget(midi_profile_group)
 
@@ -641,12 +648,12 @@ class SettingsPanel(QGroupBox):
 
             # ── About ──
             about_label = QLabel(
-                f'NativMix v{__version__}'
-                ' &nbsp;·&nbsp; '
+                f"NativMix v{__version__}"
+                " &nbsp;·&nbsp; "
                 'by <a href="https://knoellix.net/">knoelliX</a>'
-                ' &nbsp;·&nbsp; '
+                " &nbsp;·&nbsp; "
                 '<a href="https://github.com/knoelliX/NativMix">GitHub</a>'
-                ' &nbsp;·&nbsp; '
+                " &nbsp;·&nbsp; "
                 '<a href="https://github.com/knoelliX/NativMix/issues">Report Issue</a>'
             )
             about_label.setOpenExternalLinks(True)
@@ -667,8 +674,6 @@ class SettingsPanel(QGroupBox):
         self._port_box.editTextChanged.connect(self._on_port_text_changed)
         self._port_debounce_timer.timeout.connect(self._apply_port_text)
         self._update_hardware_ui_state()
-
-
 
     def populate_master_outputs(self, sinks: list[tuple[str, str]], current: str | None) -> None:
         """Populate the dropdown with (description, name) and set the current default."""
@@ -692,7 +697,6 @@ class SettingsPanel(QGroupBox):
         self._midi_status_label.setText(message)
         self._midi_status_label.setToolTip(message)
 
-
     # ------------------------------------------------------------------
 
     def mark_connected_port(self, port: str | None) -> None:
@@ -711,7 +715,7 @@ class SettingsPanel(QGroupBox):
         self._port_box.addItem("Auto-detect", userData=None)
 
         for info in _real_ports():
-            connected = (info.device == self._connected_port)
+            connected = info.device == self._connected_port
             prefix = "★ " if connected else ""
             label = f"{prefix}{info.device}"
             if info.description and info.description.lower() not in ("n/a", ""):
@@ -757,6 +761,7 @@ class SettingsPanel(QGroupBox):
 
         try:
             import mido
+
             names = mido.get_input_names()
 
             seen_bases = set()
@@ -828,7 +833,7 @@ class SettingsPanel(QGroupBox):
     @pyqtSlot(int)
     def _on_port_selected(self, index: int) -> None:
         # When selection changes from the dropdown, use the item data
-        port = self._port_box.itemData(index)   # None = Auto
+        port = self._port_box.itemData(index)  # None = Auto
         # Convert None to empty string for consistency
         if port is None:
             self._port_box.setEditText("")
@@ -888,10 +893,16 @@ class SettingsPanel(QGroupBox):
 
     @pyqtSlot(bool)
     def _on_autostart_toggled(self, checked: bool) -> None:
+        message = ""
         if self._use_windows_autostart:
             ok = _enable_autostart_windows() if checked else _disable_autostart_windows()
             actual = _is_autostart_enabled_windows()
             _suffix = " (Registry)"
+        elif self._use_flatpak_autostart:
+            from nativmix.utils.portal_autostart import request_portal_autostart
+
+            ok, actual, message = request_portal_autostart(checked)
+            _suffix = " (Flatpak)"
         elif self._use_systemd:
             ok = _enable_service() if checked else _disable_service()
             actual = _is_service_enabled()
@@ -906,8 +917,16 @@ class SettingsPanel(QGroupBox):
         self._autostart_btn.blockSignals(False)
         if not ok:
             logger.warning(
-                "Autostart toggle failed (windows=%s, systemd=%s)",
-                self._use_windows_autostart, self._use_systemd,
+                "Autostart toggle failed (windows=%s, flatpak=%s, systemd=%s): %s",
+                self._use_windows_autostart,
+                self._use_flatpak_autostart,
+                self._use_systemd,
+                message or "(no detail)",
+            )
+            QMessageBox.warning(
+                self,
+                "Autostart",
+                message or "Could not change autostart. Check the log for details.",
             )
 
     @pyqtSlot(bool)
@@ -1021,4 +1040,3 @@ class SettingsPanel(QGroupBox):
         self._profile_next_learn_btn.setText("Learn")
         self._profile_prev_learn_btn.setText("Learn")
         self._profile_direct_learn_btn.setText("Learn")
-

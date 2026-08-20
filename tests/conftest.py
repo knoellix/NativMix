@@ -1,9 +1,13 @@
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+# Headless Qt for CI/sandbox environments without a display server.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 
@@ -11,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 @pytest.fixture
 def pm(tmp_path: Path):
     from nativmix.utils.profile_manager import ProfileManager
+
     d = tmp_path / "profiles_pm"
     d.mkdir()
     manager = ProfileManager(profiles_dir=d)

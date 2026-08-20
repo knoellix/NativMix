@@ -11,6 +11,12 @@ alwaysApply: true
 - Optional startup smoke check: `PYTHONPATH=lib python -m nativmix.main`.
 - Final integration check is build/install and real hardware validation by the user.
 
+## Local hardware testing (maintainer)
+- The user tests **after a local `makepkg` install**, not against whatever NativMix process was already running.
+- For Flatpak changes: rebuild/install locally (`packaging/FLATPAK.md`) and test **that** install — not an older Flatpak build still on disk.
+- When saying the code is ready to test: wait for that local install + their report. Do not treat the old running instance as the test.
+- Do not tell the user they installed the "wrong" version after they already tested locally. Pacman/About mismatches mean the single-version rule in `nativmix-quality-release.mdc` was missed — not user error.
+
 ## Contributor PR handling
 - Use `gh pr checkout <N>`.
 - Commit fixes on the PR branch.
@@ -30,3 +36,10 @@ and remove obsolete co-author commit rule."
 ```
 
 - Alternative for longer messages: write the message to a temp file and use `git commit -F /path/to/message.txt`.
+
+## Agent skills (project-local)
+NativMix-specific audit/stress skills live in the repo, not in `~/.cursor/skills/`:
+- `.cursor/skills/nativmix-audit/` — architecture, threads, logic, standards, flatpak checks
+- `.cursor/skills/nativmix-stress/` — chaos/resilience edge-case simulation
+
+Legacy copies under `~/.claude/skills/` may be removed once the project skills are in use.

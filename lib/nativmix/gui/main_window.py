@@ -77,7 +77,6 @@ def _is_kde_x11() -> bool:
     return "KDE" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
 
 
-
 _CHANNEL_MIN_WIDTH = 60
 _CHANNEL_MAX_WIDTH = 85
 
@@ -86,15 +85,14 @@ _CHANNEL_MAX_WIDTH = 85
 # Editable channel label (double-click to rename)
 # ---------------------------------------------------------------------------
 
+
 class _EditableChannelLabel(QLabel):
     """QLabel that opens a rename dialog on double-click."""
 
     rename_requested = pyqtSignal(str)
 
     def mouseDoubleClickEvent(self, event) -> None:
-        text, ok = QInputDialog.getText(
-            self, "Rename Channel", "Name:", text=self.text()
-        )
+        text, ok = QInputDialog.getText(self, "Rename Channel", "Name:", text=self.text())
         if ok and text.strip():
             self.rename_requested.emit(text.strip())
         super().mouseDoubleClickEvent(event)
@@ -103,6 +101,7 @@ class _EditableChannelLabel(QLabel):
 # ---------------------------------------------------------------------------
 # Single mapped-app row (remove button + name)
 # ---------------------------------------------------------------------------
+
 
 class _AppRow(QWidget):
     """[×] [name]  – one per assigned app inside a channel."""
@@ -115,7 +114,7 @@ class _AppRow(QWidget):
         layout.setSpacing(2)
 
         self._remove_btn = QToolButton()
-        self._remove_btn.setIcon(QIcon.fromTheme('list-remove'))
+        self._remove_btn.setIcon(QIcon.fromTheme("list-remove"))
         self._remove_btn.setFixedSize(QSize(18, 18))
         self._remove_btn.setAutoRaise(True)
         self._remove_btn.setToolTip("Remove app.")
@@ -129,9 +128,7 @@ class _AppRow(QWidget):
             font.setBold(True)
             self._name_label.setFont(font)
 
-        elided = self._name_label.fontMetrics().elidedText(
-            app_name, Qt.TextElideMode.ElideRight, 60
-        )
+        elided = self._name_label.fontMetrics().elidedText(app_name, Qt.TextElideMode.ElideRight, 60)
         self._name_label.setText(elided)
 
         layout.addWidget(self._remove_btn)
@@ -149,7 +146,7 @@ class _AppRow(QWidget):
         accent_color = palette.color(QPalette.ColorRole.Highlight)
         accent_hex = accent_color.name()
 
-        base_icon = QIcon.fromTheme('list-remove').pixmap(18, 18)
+        base_icon = QIcon.fromTheme("list-remove").pixmap(18, 18)
 
         if not base_icon.isNull():
             tinted = QPixmap(base_icon.size())
@@ -180,6 +177,7 @@ class _AppRow(QWidget):
 # Per-channel column
 # ---------------------------------------------------------------------------
 
+
 class ChannelWidget(QFrame):
     """
     One vertical mixer channel column.
@@ -199,13 +197,15 @@ class ChannelWidget(QFrame):
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._ch     = channel_index
+        self._ch = channel_index
         self._config = config
         self._backend = backend
         self.is_midi_channel = is_midi
         logger.debug("Creating ChannelWidget: index=%d, is_midi=%s", channel_index, is_midi)
 
         self.setFrameShape(QFrame.Shape.NoFrame)
+        # Avoid opaque Fusion fills so window transparency shows around faders.
+        self.setAutoFillBackground(False)
         self.setMinimumWidth(_CHANNEL_MIN_WIDTH)
         # Prevent the whole column from stretching infinitely if long text is loaded
         self.setMaximumWidth(_CHANNEL_MAX_WIDTH)
@@ -282,8 +282,6 @@ class ChannelWidget(QFrame):
         self._add_btn = QPushButton()
         self._add_btn.clicked.connect(self._open_picker)
 
-
-
         # ── Toggle Controls ────────────────────────────────────────────
         self._toggles_layout = QVBoxLayout()
         self._toggles_layout.setContentsMargins(0, 4, 0, 0)
@@ -313,7 +311,7 @@ class ChannelWidget(QFrame):
         self._toggles_layout.addWidget(self._invert_cb)
 
         # Initialize Mode UI State
-        is_hw = (self._config.get_channel_mode(self._ch) == "hardware")
+        is_hw = self._config.get_channel_mode(self._ch) == "hardware"
         self._mode_cb.setChecked(is_hw)
         self._apply_mode_ui(is_hw)
 
@@ -346,7 +344,7 @@ class ChannelWidget(QFrame):
         # ── MIDI UI Elements (Bottom) ──────────────────────────────────
         if self.is_midi_channel:
             self._learn_btn = QToolButton()
-            self._learn_btn.setIcon(QIcon.fromTheme('media-record'))
+            self._learn_btn.setIcon(QIcon.fromTheme("media-record"))
             self._learn_btn.setText("Learn")
             self._learn_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             self._learn_btn.setCheckable(True)
@@ -362,7 +360,7 @@ class ChannelWidget(QFrame):
             self._learn_btn.clicked.connect(self._on_learn_clicked)
 
             self._remove_midi_btn = QToolButton()
-            self._remove_midi_btn.setIcon(QIcon.fromTheme('list-remove'))
+            self._remove_midi_btn.setIcon(QIcon.fromTheme("list-remove"))
             self._remove_midi_btn.setText("Delete")
             self._remove_midi_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             self._remove_midi_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -371,15 +369,13 @@ class ChannelWidget(QFrame):
             self._remove_midi_btn.clicked.connect(self._on_remove_midi_clicked)
 
             self._mute_learn_btn = QToolButton()
-            self._mute_learn_btn.setIcon(QIcon.fromTheme('audio-volume-muted'))
+            self._mute_learn_btn.setIcon(QIcon.fromTheme("audio-volume-muted"))
             self._mute_learn_btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             self._mute_learn_btn.setCheckable(True)
             self._mute_learn_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             self._mute_learn_btn.setMinimumHeight(24)
             current_mute_cc = self._config.get_midi_mute_cc(self._ch)
-            self._mute_learn_btn.setText(
-                f"Mute: {current_mute_cc}" if current_mute_cc is not None else "Mute CC"
-            )
+            self._mute_learn_btn.setText(f"Mute: {current_mute_cc}" if current_mute_cc is not None else "Mute CC")
             self._mute_learn_btn.setToolTip("Click to assign a MIDI CC to this channel's mute toggle.")
             self._mute_learn_btn.clicked.connect(self._on_mute_learn_clicked)
 
@@ -433,9 +429,7 @@ class ChannelWidget(QFrame):
             logger.debug("Channel %d entering Mute CC Learn mode", self._ch)
         else:
             cc = self._config.get_midi_mute_cc(self._ch)
-            self._mute_learn_btn.setText(
-                f"Mute: {cc}" if cc is not None else "Mute CC"
-            )
+            self._mute_learn_btn.setText(f"Mute: {cc}" if cc is not None else "Mute CC")
             self._mute_learn_btn.setPalette(QApplication.palette())
 
     def update_midi_mute_cc(self, cc_number: int) -> None:
@@ -526,9 +520,10 @@ class ChannelWidget(QFrame):
     @_slot_guard
     def _on_remove_midi_clicked(self, checked: bool = False) -> None:
         reply = QMessageBox.question(
-            self, "Remove MIDI Channel",
+            self,
+            "Remove MIDI Channel",
             f"Are you sure you want to remove {self._ch_label.text()}?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
             self._config.remove_midi_channel(self._ch)
@@ -596,8 +591,10 @@ class ChannelWidget(QFrame):
 
         # Prevent KDE from fading the accent color when the window loses focus
         for role in (
-            QPalette.ColorRole.Highlight, QPalette.ColorRole.HighlightedText,
-            QPalette.ColorRole.WindowText, QPalette.ColorRole.Button,
+            QPalette.ColorRole.Highlight,
+            QPalette.ColorRole.HighlightedText,
+            QPalette.ColorRole.WindowText,
+            QPalette.ColorRole.Button,
         ):
             palette.setColor(QPalette.ColorGroup.Inactive, role, palette.color(QPalette.ColorGroup.Active, role))
 
@@ -668,16 +665,12 @@ class ChannelWidget(QFrame):
         if self._config.get_channel_mode(self._ch) == "hardware":
             hw_id = self._config.get_hardware_id(self._ch)
             if hw_id:
-                parts = hw_id.split(':', 1)
+                parts = hw_id.split(":", 1)
                 display_name = parts[1] if len(parts) == 2 else hw_id
-                self._app_list_layout.addWidget(
-                    _AppRow(display_name, on_remove=self._remove_hw)
-                )
+                self._app_list_layout.addWidget(_AppRow(display_name, on_remove=self._remove_hw))
         else:
             for name in self._config.get_app_names(self._ch):
-                self._app_list_layout.addWidget(
-                    _AppRow(name, on_remove=lambda _=False, n=name: self._remove_app(n))
-                )
+                self._app_list_layout.addWidget(_AppRow(name, on_remove=lambda _=False, n=name: self._remove_app(n)))
 
         # Hide V-Sink for special pseudo-apps (System Master / Other Apps),
         # hardware mode, or when running on Windows (no PipeWire null-sinks).
@@ -711,7 +704,7 @@ class ChannelWidget(QFrame):
         if mode == "hardware":
             self._config.set_app_names(self._ch, [])
             if self._config.is_v_sink_enabled(self._ch):
-                self._vsink_cb.setChecked(False) # Disables the V-Sink
+                self._vsink_cb.setChecked(False)  # Disables the V-Sink
         else:
             self._config.set_hardware_id(self._ch, None)
 
@@ -768,9 +761,7 @@ class ChannelWidget(QFrame):
                 if is_vsink or hw_id in assigned_elsewhere:
                     action.setEnabled(False)
                 else:
-                    action.triggered.connect(
-                        lambda _=False, i=hw_id: self._on_hw_picked(i)
-                    )
+                    action.triggered.connect(lambda _=False, i=hw_id: self._on_hw_picked(i))
 
         # Inputs
         if sources:
@@ -787,9 +778,7 @@ class ChannelWidget(QFrame):
                 if hw_id in assigned_elsewhere:
                     action.setEnabled(False)
                 else:
-                    action.triggered.connect(
-                        lambda _=False, i=hw_id: self._on_hw_picked(i)
-                    )
+                    action.triggered.connect(lambda _=False, i=hw_id: self._on_hw_picked(i))
 
         if not sinks and not sources:
             a = menu.addAction("No hardware found")
@@ -862,9 +851,7 @@ class ChannelWidget(QFrame):
                 font.setBold(True)
                 action.setFont(font)
 
-            action.triggered.connect(
-                lambda _=False, n=name: self._on_stream_picked(n)
-            )
+            action.triggered.connect(lambda _=False, n=name: self._on_stream_picked(n))
             added_actions += 1
 
         if added_actions == 0:
@@ -952,6 +939,7 @@ class ChannelWidget(QFrame):
 # Main window
 # ---------------------------------------------------------------------------
 
+
 class MainWindow(QMainWindow):
     """
     NativMix main mixer window.
@@ -964,43 +952,43 @@ class MainWindow(QMainWindow):
     fader_display_synced = pyqtSignal()
 
     def __init__(
-        self, config: ConfigManager, backend: AudioBackendBase,
+        self,
+        config: ConfigManager,
+        backend: AudioBackendBase,
         arduino_thread: ArduinoThread | None = None,
         midi_thread: MidiThread | None = None,
         profile_manager: object | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
-        self._config  = config
+        self._config = config
         self._backend = backend
         self._arduino = arduino_thread
-        self._midi    = midi_thread
+        self._midi = midi_thread
         self._profile_manager = profile_manager
         self._channels: list[ChannelWidget] = []
         self._last_mode = self._config.input_mode
-        self.settings = QSettings('nativmix', 'GUI')
+        self.settings = QSettings("nativmix", "GUI")
 
         # Guard: set True while a show() is in flight to suppress spurious hide.
         self._show_requested: bool = False
 
         from nativmix.metadata import __app_name__, __version__
+
         self.setWindowTitle(f"{__app_name__} v{__version__}")
         # ── Window Flags ──
         # Tool is the correct type for accessory windows on all compositors
         # (KDE Wayland, COSMIC, X11).  Window|SkipTaskbarHint breaks mapping
         # on some Wayland compositors without a valid activation token.
-        self.setWindowFlags(
-            Qt.WindowType.Tool |
-            Qt.WindowType.FramelessWindowHint
-        )
+        self.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
 
         from nativmix.utils.paths import get_icon_path
+
         icon_path = get_icon_path()
         if icon_path:
             self.setWindowIcon(QIcon(str(icon_path)))
         else:
             self.setWindowIcon(QIcon.fromTheme("nativmix", QIcon.fromTheme("audio-volume-high")))
-
 
         # UI Stabilization: Fix size to prevent jumping for tiling engines
         self.setMinimumSize(400, 420)
@@ -1066,9 +1054,7 @@ class MainWindow(QMainWindow):
             self._profile_rename_timer.timeout.connect(self._apply_profile_rename)
 
             self._profile_combo.currentIndexChanged.connect(self._on_profile_selected)
-            self._profile_combo.editTextChanged.connect(
-                lambda _: self._profile_rename_timer.start()
-            )
+            self._profile_combo.editTextChanged.connect(lambda _: self._profile_rename_timer.start())
 
             self._profile_manager.profile_list_changed.connect(self._populate_profile_combo)
             self._profile_manager.profile_changed.connect(self._on_profile_changed_externally)
@@ -1105,6 +1091,8 @@ class MainWindow(QMainWindow):
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         container = QWidget()
+        container.setObjectName("channels_container")
+        container.setAutoFillBackground(False)
         self._ch_layout = QHBoxLayout(container)
         self._ch_layout.setContentsMargins(0, 0, 0, 0)
         self._ch_layout.setSpacing(6)
@@ -1142,7 +1130,7 @@ class MainWindow(QMainWindow):
         self.refresh_layout()
 
         # ── Restore geometry ───────────────────────────────────────────
-        geom = self.settings.value('geometry')
+        geom = self.settings.value("geometry")
         self._has_saved_geometry = bool(geom)
         # Debounce geometry writes: moveEvent/resizeEvent fire on every pixel.
         # The timer is restarted on each call; the actual write happens once,
@@ -1157,13 +1145,10 @@ class MainWindow(QMainWindow):
             # resolution change or panel resize) move the window to the primary
             # screen's available area so it stays visible.
             win_rect = self.frameGeometry()
-            on_screen = any(
-                s.availableGeometry().intersects(win_rect)
-                for s in QApplication.screens()
-            )
+            on_screen = any(s.availableGeometry().intersects(win_rect) for s in QApplication.screens())
             if not on_screen:
                 logger.debug("Restored geometry is off-screen – resetting to primary screen")
-                self.settings.remove('geometry')
+                self.settings.remove("geometry")
                 primary = QApplication.primaryScreen()
                 if primary:
                     ag = primary.availableGeometry()
@@ -1220,11 +1205,11 @@ class MainWindow(QMainWindow):
                     self._midi.midi_cc_received.connect(w.handle_midi_input)
                 # Apply current edit mode so buttons show/hide correctly —
                 # kept outside the self._midi guard so it fires on every rebuild.
-                if w.is_midi_channel and hasattr(self, '_edit_midi_btn'):
+                if w.is_midi_channel and hasattr(self, "_edit_midi_btn"):
                     w.set_edit_mode(self._edit_midi_btn.isChecked())
 
                 # Apply compact mode
-                if hasattr(self, '_compact_btn'):
+                if hasattr(self, "_compact_btn"):
                     w.set_compact_mode(self._compact_btn.isChecked())
 
                 self._ch_layout.addWidget(w)
@@ -1363,7 +1348,7 @@ class MainWindow(QMainWindow):
         self._config.compact_mode = checked
         for w in self._channels:
             w.set_compact_mode(checked)
-        if hasattr(self, '_add_midi_btn'):
+        if hasattr(self, "_add_midi_btn"):
             _midi_mode = self._config.input_mode in ("hybrid", "midi_only")
             self._add_midi_btn.setVisible(_midi_mode and not checked)
             self._edit_midi_btn.setVisible(_midi_mode and not checked)
@@ -1374,23 +1359,26 @@ class MainWindow(QMainWindow):
             self._size_grip.setVisible(False)
             # Allow window to shrink below normal minimum temporarily
             self.setMinimumHeight(0)
+
             # Shrink to fit; then lock minimum to compact height so user can't go smaller
             def _do_compact_resize():
                 QApplication.processEvents()
                 m = self._root_layout.contentsMargins()
                 sp = self._root_layout.spacing()
                 top_h = self._toggle_settings_btn.height()
-                ch_h = (self._channels[0].sizeHint().height()
-                        if self._channels else 200)
+                ch_h = self._channels[0].sizeHint().height() if self._channels else 200
                 h = m.top() + top_h + sp + ch_h + m.bottom()
                 logger.debug("Compact resize: top=%d ch=%d → h=%d", top_h, ch_h, h)
                 # setFixedHeight forces the resize even if the WM ignores resize()
                 self.setFixedHeight(h)
+
                 # Immediately release fixed constraint so user can still resize larger
                 def _release_height_constraint() -> None:
                     self.setMinimumHeight(h)
                     self.setMaximumHeight(16777215)
+
                 QTimer.singleShot(0, _release_height_constraint)
+
             QTimer.singleShot(0, _do_compact_resize)
         else:
             # Restore normal margins, spacing, grip and minimum height
@@ -1399,7 +1387,7 @@ class MainWindow(QMainWindow):
             self._size_grip.setVisible(True)
             self.setMinimumHeight(420)
             # Restore saved height
-            saved = getattr(self, '_pre_compact_height', None)
+            saved = getattr(self, "_pre_compact_height", None)
             if saved:
                 QTimer.singleShot(0, lambda: self.resize(self.width(), saved))
         logger.debug("Compact mode toggled: %s", checked)
@@ -1425,18 +1413,15 @@ class MainWindow(QMainWindow):
     @_slot_guard
     def _on_settings_updated(self) -> None:
         # 1. Rebuild channels if mode or count changed
-        mode_changed = (self._last_mode != self._config.input_mode)
+        mode_changed = self._last_mode != self._config.input_mode
         # In USB mode MIDI widgets are not built, so compare against hw count only.
         expected_widgets = (
-            self._config.hw_channel_count
-            if self._config.input_mode == "usb"
-            else self._config.num_channels
+            self._config.hw_channel_count if self._config.input_mode == "usb" else self._config.num_channels
         )
-        count_changed = (len(self._channels) != expected_widgets)
+        count_changed = len(self._channels) != expected_widgets
 
         if mode_changed or count_changed:
-            logger.debug("Mode or count changed (%s -> %s) – rebuilding GUI",
-                        self._last_mode, self._config.input_mode)
+            logger.debug("Mode or count changed (%s -> %s) – rebuilding GUI", self._last_mode, self._config.input_mode)
             self._last_mode = self._config.input_mode
             self._rebuild_channels()
 
@@ -1507,7 +1492,7 @@ class MainWindow(QMainWindow):
         self.sync_ui_to_hardware()
 
         # 4. Visibility logic (Clean Hide/Show)
-        if hasattr(self, '_add_midi_btn'):
+        if hasattr(self, "_add_midi_btn"):
             _midi_mode = mode in ("hybrid", "midi_only")
             _compact = self._config.compact_mode
             self._add_midi_btn.setVisible(_midi_mode and not _compact)
@@ -1549,9 +1534,7 @@ class MainWindow(QMainWindow):
                     self._backend.apply_poti_volumes(hw_vols)
                     hardware_synced = True
                 else:
-                    logger.debug(
-                        "Arduino sync: no real data yet – keeping profile/config volumes for UI"
-                    )
+                    logger.debug("Arduino sync: no real data yet – keeping profile/config volumes for UI")
             except Exception as exc:
                 logger.error("Arduino sync failed: %s", exc)
 
@@ -1663,14 +1646,20 @@ class MainWindow(QMainWindow):
         self.profile_switch_requested.emit(new_id)
         # Defer focus/select until after the event loop processes the switch signal
         if hasattr(self, "_profile_combo"):
-            QTimer.singleShot(0, lambda: (
-                self._profile_combo.setFocus(),
-                self._profile_combo.lineEdit().selectAll()
-            ) if hasattr(self, "_profile_combo") else None)
+            QTimer.singleShot(
+                0,
+                lambda: (self._profile_combo.setFocus(), self._profile_combo.lineEdit().selectAll())
+                if hasattr(self, "_profile_combo")
+                else None,
+            )
 
     def _apply_transparency(self) -> None:
         """
         Applies a semi-transparent background to the main window.
+
+        Under Fusion (Flatpak), child frames/group boxes otherwise paint opaque
+        Window fills — so when transparency is on we force container backgrounds
+        transparent. Faders keep their own opaque groove/handle stylesheets.
         """
         transparent = bool(self._config.transparency)
         # WA_TranslucentBackground stays always-on (set at init); only alpha changes.
@@ -1682,7 +1671,26 @@ class MainWindow(QMainWindow):
             alpha = 255  # Solid (Standard System-Theme)
 
         rgba_string = f"rgba({sys_color.red()}, {sys_color.green()}, {sys_color.blue()}, {alpha})"
-        self.setStyleSheet(f"#MainFrame {{ background-color: {rgba_string}; border-radius: 12px; }}")
+        if transparent:
+            # Keep containers glass-clear; interactive controls (combo/slider via
+            # their own styles) stay readable. Do not blanket-clear every QWidget
+            # — that would wash out combo popups and buttons.
+            self.setStyleSheet(
+                f"#MainFrame {{ background-color: {rgba_string}; border-radius: 12px; }}"
+                "#MainFrame QFrame,"
+                "#MainFrame QGroupBox,"
+                "#MainFrame QScrollArea,"
+                "#MainFrame QAbstractScrollArea::viewport,"
+                "#MainFrame #channels_container,"
+                "#MainFrame #app_list_widget {"
+                " background-color: transparent;"
+                "}"
+                "#MainFrame QSlider {"
+                " background-color: transparent;"
+                "}"
+            )
+        else:
+            self.setStyleSheet(f"#MainFrame {{ background-color: {rgba_string}; border-radius: 12px; }}")
 
         # Force a repaint to safely apply KWin compositor changes on-the-fly
         self.repaint()
@@ -1699,10 +1707,11 @@ class MainWindow(QMainWindow):
     def _on_panic_triggered(self) -> None:
         """Reset all apps to default sink, destroy V-Sinks, clear mappings."""
         reply = QMessageBox.question(
-            self, "Panic Reset",
+            self,
+            "Panic Reset",
             "This will destroy all virtual cables and move all apps back to the system default output."
             "\n\nAre you sure?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
         )
         if reply == QMessageBox.StandardButton.Yes:
             # 1. Backend reset
@@ -1716,8 +1725,6 @@ class MainWindow(QMainWindow):
             self._rebuild_channels()
             self._on_master_refresh()
             logger.debug("Panic Reset completed from GUI.")
-
-
 
     @pyqtSlot()
     @_slot_guard
@@ -1738,7 +1745,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        self.settings.setValue('geometry', self.saveGeometry())
+        self.settings.setValue("geometry", self.saveGeometry())
 
         # If the Tray Icon called "Quit NativMix", we must accept the event
         # so QApplication.quit() can actually terminate the application.
@@ -1766,9 +1773,6 @@ class MainWindow(QMainWindow):
             logger.debug("Close event accepted, re-showing (Stay Open is ON)")
         else:
             logger.debug("Window closed/hidden to tray (Stay Open is OFF)")
-
-
-
 
     # ------------------------------------------------------------------
     # Drag & Auto-Hide on Focus Loss (Applet Behavior)
@@ -1828,7 +1832,10 @@ class MainWindow(QMainWindow):
         g = self.geometry()
         logger.debug(
             "showEvent: geometry=(%d,%d %dx%d) isActiveWindow=%s _show_requested=%s",
-            g.x(), g.y(), g.width(), g.height(),
+            g.x(),
+            g.y(),
+            g.width(),
+            g.height(),
             self.isActiveWindow(),
             getattr(self, "_show_requested", False),
         )
@@ -1852,5 +1859,5 @@ class MainWindow(QMainWindow):
     def _flush_geometry(self) -> None:
         """Write the current geometry to QSettings (called by debounce timer)."""
         if self.isVisible():
-            self.settings.setValue('geometry', self.saveGeometry())
+            self.settings.setValue("geometry", self.saveGeometry())
             logger.debug("Window geometry saved")

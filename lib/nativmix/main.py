@@ -110,7 +110,7 @@ class IpcServer(QObject):
                 logger.error("Invalid IPC message: %s", data)
         elif data == "list_sinks":
             self.list_sinks_requested.emit(socket)
-            return # Socket handled by recipient
+            return  # Socket handled by recipient
         elif data == "list_apps":
             self.list_apps_requested.emit(socket)
             return
@@ -119,7 +119,7 @@ class IpcServer(QObject):
         elif data == "restart":
             self.restart_requested.emit()
         elif data.startswith("profile:"):
-            target = data[len("profile:"):]
+            target = data[len("profile:") :]
             self.profile_switch_requested.emit(target)
         elif data.startswith("vol:"):
             try:
@@ -133,10 +133,11 @@ class IpcServer(QObject):
 def _install_excepthook() -> None:
     """Install a global exception handler that logs crashes to the XDG cache dir."""
     from nativmix.utils.paths import get_log_dir
+
     crash_log = get_log_dir() / "nativmix_crash.log"
 
     def _excepthook(exc_type, exc_value, exc_tb):
-        if issubclass(exc_type, (KeyboardInterrupt, SystemExit)):
+        if issubclass(exc_type, KeyboardInterrupt | SystemExit):
             sys.__excepthook__(exc_type, exc_value, exc_tb)
             return
         logger.critical("Unhandled exception — writing crash log to %s", crash_log)
@@ -144,6 +145,7 @@ def _install_excepthook() -> None:
         try:
             crash_log.parent.mkdir(parents=True, exist_ok=True)
             import traceback
+
             with open(crash_log, "w", encoding="utf-8") as f:
                 traceback.print_exception(exc_type, exc_value, exc_tb, file=f)
         except OSError:
@@ -162,10 +164,18 @@ def main() -> None:
 
     # ── CLI Parsing ──────────────────────────────────────────────────────────
     parser = argparse.ArgumentParser(description="NativMix Hardware Volume Mixer")
-    parser.add_argument("--toggle-mute", type=int, metavar="CHANNEL",
-                        help="Toggle mute for a channel via IPC (1-indexed: 1 = first channel)")
-    parser.add_argument("--vol", nargs=2, metavar=("CHANNEL", "PERCENT"),
-                        help="Set volume for a channel via IPC (channel: 1-indexed, percent: 0-100)")
+    parser.add_argument(
+        "--toggle-mute",
+        type=int,
+        metavar="CHANNEL",
+        help="Toggle mute for a channel via IPC (1-indexed: 1 = first channel)",
+    )
+    parser.add_argument(
+        "--vol",
+        nargs=2,
+        metavar=("CHANNEL", "PERCENT"),
+        help="Set volume for a channel via IPC (channel: 1-indexed, percent: 0-100)",
+    )
     parser.add_argument("--list-sinks", action="store_true", help="List active NativMix V-Sinks via IPC")
     parser.add_argument("--list-apps", action="store_true", help="List detected audio apps via IPC")
     parser.add_argument("--hidden", action="store_true", help="Start the application minimized to tray")
@@ -203,7 +213,8 @@ def main() -> None:
         # Try to open the pipe; success means an instance is already running.
         import ctypes
         import ctypes.wintypes as _wt
-        _pipe_path = r'\\.\pipe\\' + IPC_SERVER_NAME
+
+        _pipe_path = r"\\.\pipe\\" + IPC_SERVER_NAME
         _k32 = ctypes.windll.kernel32
         _GENERIC_RW = 0xC0000000
         _OPEN_EXISTING = 3
@@ -213,7 +224,7 @@ def main() -> None:
         _k32.CreateFileW.restype = _wt.HANDLE
         _INVALID_HANDLE = _wt.HANDLE(-1).value
 
-        _k32.WaitNamedPipeW(_pipe_path, 500)   # wait up to 500 ms if server is busy
+        _k32.WaitNamedPipeW(_pipe_path, 500)  # wait up to 500 ms if server is busy
         _h = _k32.CreateFileW(_pipe_path, _GENERIC_RW, 0, None, _OPEN_EXISTING, 0, None)
 
         if _h is not None and _h != _INVALID_HANDLE:
@@ -250,7 +261,7 @@ def main() -> None:
                         _ok = _k32.ReadFile(_h, _buf, len(_buf), ctypes.byref(_nread), None)
                         if not _ok or _nread.value == 0:
                             break
-                        _chunks.append(_buf.raw[:_nread.value])
+                        _chunks.append(_buf.raw[: _nread.value])
                     try:
                         print(b"".join(_chunks).decode("utf-8"))
                     except UnicodeDecodeError as exc:
@@ -275,6 +286,7 @@ def main() -> None:
         # Phase 2: if the lock is already held, wait up to 1 s for the primary
         # instance to create its IPC socket, then forward the command and exit.
         import fcntl as _fcntl
+
         _lock_path = os.path.join(os.path.dirname(get_ipc_socket_path()), "nativmix.lock")
         _lock_fh = open(_lock_path, "w", opener=lambda path, flags: os.open(path, flags | os.O_CLOEXEC))
         _is_primary = False
@@ -340,8 +352,7 @@ def main() -> None:
                 except (TimeoutError, FileNotFoundError, ConnectionRefusedError):
                     time.sleep(0.1)
             if _forwarded:
-                logging.getLogger(__name__).info(
-                    "Forwarded '%s' to running instance and exiting.", msg)
+                logging.getLogger(__name__).info("Forwarded '%s' to running instance and exiting.", msg)
                 sys.exit(0)
             # IPC socket never appeared — the other instance may have crashed
             # between acquiring the lock and creating the socket.  Try to take
@@ -355,18 +366,18 @@ def main() -> None:
                 _lock_fh.write(str(os.getpid()))
                 _lock_fh.flush()
                 logging.getLogger(__name__).warning(
-                    "Previous instance vanished before IPC was ready — taking over as primary.")
+                    "Previous instance vanished before IPC was ready — taking over as primary."
+                )
             except OSError:
                 _lock_fh2.close()
-                logging.getLogger(__name__).error(
-                    "Another instance holds the lock and IPC is unreachable — giving up.")
+                logging.getLogger(__name__).error("Another instance holds the lock and IPC is unreachable — giving up.")
                 sys.exit(1)
 
     # ── Path Robustness ──────────────────────────────────────────────────────
     # If running as a standalone script (e.g. locally or via desktop file),
     # ensure the 'lib' directory is in the python path so 'import nativmix' works.
     _script_dir = os.path.dirname(os.path.abspath(__file__))
-    _lib_root = os.path.dirname(_script_dir) # ../ (points to lib/)
+    _lib_root = os.path.dirname(_script_dir)  # ../ (points to lib/)
     if _lib_root not in sys.path:
         sys.path.insert(0, _lib_root)
 
@@ -374,6 +385,7 @@ def main() -> None:
     try:
         import nativmix
         import nativmix.gui.settings_panel as _sp
+
         logger.debug("nativmix loaded from: %s", nativmix.__file__)
         logger.debug("settings_panel loaded from: %s", _sp.__file__)
     except ImportError as e:
@@ -392,7 +404,7 @@ def main() -> None:
         attempt = 0
         display_ready = False
         while attempt < max_attempts:
-            if 'WAYLAND_DISPLAY' in os.environ or 'DISPLAY' in os.environ:
+            if "WAYLAND_DISPLAY" in os.environ or "DISPLAY" in os.environ:
                 display_ready = True
                 break
             logger.warning("No display server found. Retrying (%d/%d)...", attempt + 1, max_attempts)
@@ -413,46 +425,61 @@ def main() -> None:
     app.setApplicationDisplayName("NativMix")
     # Enforce correct App-ID for Wayland compositor to map .desktop file
     from PyQt6.QtGui import QGuiApplication
+
     QGuiApplication.setDesktopFileName("nativmix")
 
     from nativmix.utils.paths import get_icon_path
+
     icon_path = get_icon_path()
     if icon_path:
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # ── Dynamic Theme & Fallback Engine ──
+    # ── Theme handling ──
     try:
-        # Retrieve all available styles, convert to lower case for insensitive matching
-        available_styles = {s.lower(): s for s in QStyleFactory.keys()}
+        from nativmix.gui.theme import (
+            ColorScheme,
+            ThemeWatcher,
+            apply_fusion_fallback,
+            resolve_prefer_dark,
+        )
+        from nativmix.utils.paths import is_flatpak
 
-        # Priority 1: kvantum (Plasma transparency/blur engines)
-        # Priority 2: breeze (Plasma standard)
-        # Priority 3: fusion (Qt standard fallback)
-        chosen_style = None
-        for pref in ("kvantum", "breeze", "fusion"):
-            if pref in available_styles:
-                chosen_style = available_styles[pref]
-                app.setStyle(chosen_style)
-                logger.info("Theme engine loaded: %s", chosen_style)
-                break
+        # Keep the native system style chosen by Qt/desktop integration.
+        # Only apply our palette fallback when we are truly on Fusion
+        # (typical Flatpak sandbox; also rare native Fusion-only setups).
+        style_name = app.style().objectName() or ""
+        style_key = style_name.lower()
+        logger.info(
+            "Qt system style detected: %s (flatpak=%s)",
+            style_name or "<unknown>",
+            is_flatpak(),
+        )
 
-        # If we fell all the way back to fusion (which defaults to bright gray),
-        # force a dark palette to prevent blinding the user.
-        if chosen_style and chosen_style.lower() == "fusion":
-            from PyQt6.QtGui import QColor, QPalette
-            dark_palette = QPalette()
-            dark_palette.setColor(QPalette.ColorRole.Window, QColor(45, 45, 45))
-            dark_palette.setColor(QPalette.ColorRole.WindowText, QColor(208, 208, 208))
-            dark_palette.setColor(QPalette.ColorRole.Base, QColor(30, 30, 30))
-            dark_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(45, 45, 45))
-            dark_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(208, 208, 208))
-            dark_palette.setColor(QPalette.ColorRole.ToolTipText, QColor(208, 208, 208))
-            dark_palette.setColor(QPalette.ColorRole.Text, QColor(208, 208, 208))
-            dark_palette.setColor(QPalette.ColorRole.Button, QColor(45, 45, 45))
-            dark_palette.setColor(QPalette.ColorRole.ButtonText, QColor(208, 208, 208))
-            dark_palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
-            app.setPalette(dark_palette)
-            logger.info("Applied dark fallback palette for Fusion")
+        if style_key == "fusion":
+            # Prefer a real desktop style plugin when available (native installs).
+            available_styles = {s.lower(): s for s in QStyleFactory.keys()}
+            for pref in ("kvantum", "breeze"):
+                if pref in available_styles:
+                    app.setStyle(available_styles[pref])
+                    style_name = app.style().objectName() or available_styles[pref]
+                    style_key = style_name.lower()
+                    logger.info("Switched from Fusion to preferred style: %s", style_name)
+                    break
+
+        if style_key == "fusion":
+            watcher = ThemeWatcher(parent=app)
+            watcher.start()
+
+            def _on_scheme_changed(scheme: int) -> None:
+                apply_fusion_fallback(app, resolve_prefer_dark(ColorScheme(scheme)))
+
+            apply_fusion_fallback(app, watcher.is_dark)
+            watcher.color_scheme_changed.connect(_on_scheme_changed)
+            # Keep a strong reference for runtime theme updates.
+            app._theme_watcher = watcher  # type: ignore[attr-defined]
+            logger.info("Fusion fallback active with portal color-scheme updates")
+        else:
+            logger.info("Using native system style without palette override")
     except Exception as e:
         logger.warning("Failed to apply Qt theme/style: %s. Using default.", e)
 
@@ -463,10 +490,12 @@ def main() -> None:
     os_name = platform.system()
     if os_name == "Linux":
         from nativmix.audio.manager import PipeWireManager
+
         def backend_instance(cfg):
             return PipeWireManager(config=cfg)
     elif os_name == "Windows":
         from nativmix.audio.wasapi_manager import WasapiManager
+
         def backend_instance(cfg):
             return WasapiManager(config=cfg)
     else:
@@ -565,6 +594,7 @@ def main() -> None:
 
     # MIDI volumes → audio backend
     midi.midi_volumes_changed.connect(backend.apply_midi_volumes)
+
     # MIDI CC movements → visual feedback on sliders
     def _on_midi_volumes_changed(mappings: list[tuple[int, float]]) -> None:
         try:
@@ -583,9 +613,8 @@ def main() -> None:
     midi.connection_changed.connect(window.on_midi_connection_changed)
 
     # Port selector → immediate reconnect on the chosen port
-    window.settings_panel.port_changed.connect(
-        lambda port: arduino.set_port(port if port else None)
-    )
+    window.settings_panel.port_changed.connect(lambda port: arduino.set_port(port if port else None))
+
     # Arduino connected → mark port with ★ in the combo box
     def _on_arduino_connection_changed(connected: bool) -> None:
         try:
@@ -686,11 +715,9 @@ def main() -> None:
                 vols = [ch.get("volume", 1.0) for ch in channels]
                 backend.apply_poti_volumes(vols)
                 window.on_volumes_changed(vols)
-                arduino.set_takeover_pending({
-                    i: ch.get("volume", 1.0)
-                    for i, ch in enumerate(channels)
-                    if not ch.get("is_midi", False)
-                })
+                arduino.set_takeover_pending(
+                    {i: ch.get("volume", 1.0) for i, ch in enumerate(channels) if not ch.get("is_midi", False)}
+                )
                 _push_midi_fader_feedback()
             elif arduino.has_real_data:
                 # No restore: immediately push current hardware positions to the
@@ -717,9 +744,7 @@ def main() -> None:
             logger.debug("Could not update profile settings UI for %s", profile_id, exc_info=True)
 
     profile_manager.profile_changed.connect(_update_profile_settings_ui)
-    profile_manager.profile_list_changed.connect(
-        lambda: _update_profile_settings_ui(profile_manager.active_profile_id)
-    )
+    profile_manager.profile_list_changed.connect(lambda: _update_profile_settings_ui(profile_manager.active_profile_id))
     # Initialize UI from startup profile
     if active_id:
         _update_profile_settings_ui(active_id)
@@ -778,9 +803,7 @@ def main() -> None:
             logger.exception("_on_delete_profile_requested: error deleting %r", profile_id)
 
     window.settings_panel.delete_profile_requested.connect(_on_delete_profile_requested)
-    window.settings_panel.save_profile_requested.connect(
-        lambda: profile_manager.save_current(config.all_channels())
-    )
+    window.settings_panel.save_profile_requested.connect(lambda: profile_manager.save_current(config.all_channels()))
 
     def _on_restore_fader_positions_changed(enabled: bool) -> None:
         if not enabled:
@@ -805,9 +828,7 @@ def main() -> None:
         except Exception:
             logger.exception("_on_restore_fader_positions_changed: error saving fader positions")
 
-    window.settings_panel.restore_fader_positions_changed.connect(
-        _on_restore_fader_positions_changed
-    )
+    window.settings_panel.restore_fader_positions_changed.connect(_on_restore_fader_positions_changed)
 
     def _on_channel_changed() -> None:
         profile_manager.save_current(config.all_channels())
@@ -840,9 +861,11 @@ def main() -> None:
     # ── Startup Coordination (Flicker Protection) ──
     class StartupCoordinator(QObject):
         ready = pyqtSignal()
+
         def __init__(self):
             super().__init__()
             self._backends_ready = {"audio": False}
+
         def mark_ready(self, source):
             self._backends_ready[source] = True
             if all(self._backends_ready.values()):
@@ -980,9 +1003,7 @@ def main() -> None:
             importlib.metadata.MetadataPathFinder.invalidate_caches()
             installed = importlib.metadata.version("nativmix")
             if installed != _running_version:
-                logger.info(
-                    "Update detected (%s → %s) — restarting", _running_version, installed
-                )
+                logger.info("Update detected (%s → %s) — restarting", _running_version, installed)
                 _do_restart = True
                 QApplication.quit()
         except Exception as exc:
@@ -1063,11 +1084,13 @@ def main() -> None:
         # Systemd service: delegate restart so the new process starts in the correct cgroup.
         if is_systemd_service():
             import subprocess
+
             logger.info("Restarting via systemctl (systemd service detected)")
             try:
                 subprocess.run(
                     ["systemctl", "--user", "daemon-reload"],
-                    capture_output=True, timeout=10,
+                    capture_output=True,
+                    timeout=10,
                 )
             except subprocess.TimeoutExpired:
                 logger.warning("daemon-reload timed out — skipping")
@@ -1088,6 +1111,7 @@ if __name__ == "__main__":
         import traceback
 
         from nativmix.utils.paths import get_log_dir
+
         crash_log = get_log_dir() / "nativmix_crash.log"
         crash_log.parent.mkdir(parents=True, exist_ok=True)
         with open(crash_log, "w", encoding="utf-8") as f:

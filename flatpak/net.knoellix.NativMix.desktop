@@ -1,0 +1,12 @@
+[Desktop Entry]
+Name=NativMix
+Comment=Hardware-assisted volume mixer for PipeWire/PulseAudio
+GenericName=Volume Mixer
+Exec=nativmix
+Icon=net.knoellix.NativMix
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=AudioVideo;Audio;Mixer;
+StartupWMClass=nativmix
+Keywords=audio;mixer;volume;pipewire;pulseaudio;arduino;

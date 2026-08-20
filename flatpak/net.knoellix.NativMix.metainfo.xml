@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>net.knoellix.NativMix</id>
+  <name>NativMix</name>
+  <summary>Hardware-assisted volume mixer for PipeWire and PulseAudio</summary>
+  <description>
+    <p>
+      NativMix maps hardware controls (Arduino or MIDI) to per-application and
+      system audio volume using PipeWire/PulseAudio on Linux.
+    </p>
+  </description>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <launchable type="desktop-id">net.knoellix.NativMix.desktop</launchable>
+  <url type="homepage">https://github.com/knoellix/NativMix</url>
+  <url type="bugtracker">https://github.com/knoellix/NativMix/issues</url>
+</component>

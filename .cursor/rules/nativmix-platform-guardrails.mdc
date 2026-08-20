@@ -17,7 +17,10 @@ alwaysApply: true
 ## Theming and autostart
 - Read system theme and color preferences through XDG Desktop Portal (`org.freedesktop.portal.Settings`).
 - Do not hardcode KDE/GNOME-specific paths for theming.
-- Autostart must be user-space only via `~/.config/autostart/`.
+- **Native installs:** keep Qt's desktop style (Breeze/Kvantum/etc.); no forced palette override unless Fusion is the active style.
+- **Flatpak / Fusion-only:** apply dedicated light/dark fallback palette; portal `color-scheme` drives light/dark at startup and on change — not full native system design (document in wiki + README).
+- Autostart must be user-space only via `~/.config/autostart/` on the **host**.
+- Flatpak autostart needs a separate portal path (`org.freedesktop.portal.Background`) — do not break host autostart when adding it.
 - Never use `sudo` or runtime writes to `/etc/xdg/autostart/`.
 
 ## Audio safety behavior

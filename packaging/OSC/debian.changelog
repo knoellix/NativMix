@@ -1,3 +1,10 @@
+nativmix (1.0.18) unstable; urgency=medium
+
+  * Flatpak: stabilize fallback theming path for Fusion-only sandbox runtime
+  * Flatpak: improve tooltip readability and startup theme consistency
+
+ -- Christian Möllmann <moellix@knoellix.net>  Wed, 19 Aug 2026 19:40:00 +0200
+
 nativmix (1.0.17) unstable; urgency=medium
 
   * Fix: V-Sink loopback passes explicit sink= to hardware output — stops

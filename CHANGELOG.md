@@ -2,6 +2,14 @@
 
 All notable changes to NativMix are documented in this file.
 
+## v1.0.18
+
+- Flatpak: Manifest and local build docs (`flatpak/`, `packaging/FLATPAK.md`); portable fallback when no native package fits
+- Flatpak: Dedicated Fusion light/dark palette via XDG portal `color-scheme` (startup + live); native desktop styles unchanged
+- Flatpak: Portal-based autostart (`org.freedesktop.portal.Background`); host autostart path unchanged
+- Fix: Apply channel mute when a mapped stream appears (incl. Other Apps catch-all); avoid always-unmute after reflex mute (#29)
+- Fix: Re-apply channel volume/routing when PipeWire resolves the app name late (no fader nudge needed)
+
 ## v1.0.17
 
 - Fix: V-Sink loopback modules now pass explicit `sink=` to the hardware output — WirePlumber no longer retries `No input node for loopback-*` and breaks Twitch/game audio routing; stale loopbacks without `sink=` are reloaded on audit/hotplug
