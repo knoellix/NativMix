@@ -6,8 +6,10 @@ import pytest
 
 def _load_manager(config_path: Path, profiles_dir: Path):
     import sys
+
     sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
     from nativmix.utils.config_manager import ConfigManager
+
     return ConfigManager(config_path=config_path, profiles_dir=profiles_dir)
 
 
@@ -81,11 +83,13 @@ def test_migration_sets_active_profile(tmp_config_path, tmp_profiles_dir):
     assert saved["active_profile"] == "profile-1"
 
 
-def test_migration_sets_version_7(tmp_config_path, tmp_profiles_dir):
+def test_migration_sets_current_config_version(tmp_config_path, tmp_profiles_dir):
     tmp_config_path.write_text(json.dumps(_v6_config(5)))
     _load_manager(tmp_config_path, tmp_profiles_dir)
     saved = json.loads(tmp_config_path.read_text())
-    assert saved["version"] == 7
+    assert saved["version"] == 8
+    assert saved["settings"].get("check_for_updates") is True
+    assert saved["settings"].get("update_dismissed_version") is None
 
 
 def test_fresh_install_creates_profile_1(tmp_config_path, tmp_profiles_dir):

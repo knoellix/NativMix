@@ -582,6 +582,14 @@ def main() -> None:
     else:
         tray.show()
 
+    # Windows / Flatpak: optional GitHub release hint (no auto-download)
+    from nativmix.gui.update_checker import UpdateChecker, update_check_supported
+
+    if update_check_supported():
+        update_checker = UpdateChecker(config=config, parent=window)
+        window._update_checker = update_checker  # keep alive for the session
+        QTimer.singleShot(4000, update_checker.start)
+
     # ── Signal wiring ───────────────────────────────────────────────────
     # Backend mute updates → GUI Mute Buttons
     backend.mute_state_changed.connect(window.on_mute_state_changed)

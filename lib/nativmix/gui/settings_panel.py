@@ -513,6 +513,16 @@ class SettingsPanel(QGroupBox):
             self._auto_search_cb.toggled.connect(self._on_auto_search_toggled)
             bottom_layout.addWidget(self._auto_search_cb)
 
+            if is_windows() or is_flatpak():
+                self._check_updates_cb = QCheckBox("Check for updates")
+                self._check_updates_cb.setToolTip(
+                    "On startup, check GitHub for a newer release and show a hint "
+                    "with a link to the release notes. No automatic download."
+                )
+                self._check_updates_cb.setChecked(self._config.check_for_updates)
+                self._check_updates_cb.toggled.connect(self._on_check_updates_toggled)
+                bottom_layout.addWidget(self._check_updates_cb)
+
             bottom_layout.addStretch()
 
             root_layout.addLayout(bottom_layout)
@@ -954,6 +964,13 @@ class SettingsPanel(QGroupBox):
         self._config.midi_fader_feedback = checked
         self._config.save()
         logger.debug("MIDI fader feedback toggled: %s", checked)
+
+    @_slot_guard
+    @pyqtSlot(bool)
+    def _on_check_updates_toggled(self, checked: bool = False) -> None:
+        self._config.check_for_updates = checked
+        self._config.save()
+        logger.debug("Check for updates toggled: %s", checked)
 
     @pyqtSlot(int)
     def _on_curve_changed(self, slider_value: int) -> None:

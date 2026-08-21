@@ -31,6 +31,10 @@ flatpak run net.knoellix.NativMix
 Until Flathub (or another OSTree remote) is set up, treat the release `.flatpak`
 like the Windows `.exe`: a versioned download per tag, not a live update channel.
 
+Windows and Flatpak builds can show an **in-app hint** when a newer GitHub release
+exists (Settings → “Check for updates”). That is a reminder with a link only —
+not `flatpak update`.
+
 ## Local test build
 
 ```bash
@@ -81,6 +85,7 @@ the manifest also bundles `krb5` to provide `libgssapi_krb5.so.2`.
 - `--socket=pulseaudio`
 - `--filesystem=xdg-run/pipewire-0`
 - `--device=all`
+- `--share=network` (optional GitHub update hint; no auto-download)
 - `--filesystem=xdg-config/autostart:create` (detect Flatpak portal autostart desktop)
 - `--system-talk-name=org.freedesktop.login1`
 - Wayland/X11 + DRI + IPC

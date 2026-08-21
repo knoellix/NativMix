@@ -4,6 +4,7 @@ All notable changes to NativMix are documented in this file.
 
 ## v1.0.18
 
+- Feat: Windows/Flatpak — optional GitHub update hint on startup (release link + changelog; per-version “don’t remind”; master toggle in Settings)
 - Flatpak: Manifest and local build docs (`flatpak/`, `packaging/FLATPAK.md`); portable fallback when no native package fits
 - Flatpak: Dedicated Fusion light/dark palette via XDG portal `color-scheme` (startup + live); native desktop styles unchanged
 - Flatpak: Portal-based autostart (`org.freedesktop.portal.Background`); host autostart path unchanged

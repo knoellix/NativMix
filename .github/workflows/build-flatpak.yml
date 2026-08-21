@@ -4,6 +4,9 @@ name: Build Flatpak Bundle
 # to the GitHub Release. A single-file bundle is NOT a Flatpak remote —
 # users do not get pacman-like `flatpak update` until Flathub (or another
 # OSTree remote) is wired up. See packaging/FLATPAK.md.
+#
+# workflow_dispatch also attaches to the existing release matching
+# metadata.__version__ (tag vX.Y.Z), so a manual rebuild can fill a missing asset.
 
 on:
   push:
@@ -47,6 +50,7 @@ jobs:
             exit 1
           fi
           echo "VERSION=${V}" >> "$GITHUB_OUTPUT"
+          echo "TAG=v${V}" >> "$GITHUB_OUTPUT"
           echo "Building Flatpak bundle for NativMix ${V}"
 
       - name: Build Flatpak bundle
@@ -58,9 +62,11 @@ jobs:
           upload-artifact: true
 
       - name: Attach bundle to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        # Tag pushes attach to that tag; manual runs attach to v<metadata version>
+        # so a green workflow_dispatch can still fill a missing release asset.
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.TAG }}
           name: "NativMix v${{ steps.version.outputs.VERSION }}"
           draft: false
           prerelease: false

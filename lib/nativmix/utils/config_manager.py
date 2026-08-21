@@ -71,7 +71,7 @@ from nativmix.utils.paths import get_config_dir as _get_config_dir_from_paths
 
 logger = logging.getLogger(__name__)
 
-CONFIG_VERSION = 7
+CONFIG_VERSION = 8
 
 # App names that have special routing semantics and cannot be mixed with regular apps.
 SPECIAL_APPS: frozenset[str] = frozenset({"system master", "other apps"})
@@ -104,6 +104,10 @@ def _default_settings(num_channels: int = 5) -> dict[str, Any]:
         "compact_mode": False,
         # MIDI: send outbound CC to sync physical fader positions (opt-in, default off)
         "midi_fader_feedback": False,
+        # Windows/Flatpak: check GitHub releases for a newer version (hint only)
+        "check_for_updates": True,
+        # Normalized version string the user chose not to be reminded about again
+        "update_dismissed_version": None,
     }
 
 
@@ -368,6 +372,8 @@ class ConfigManager(QObject):
         self._data["settings"].setdefault("stay_open", False)
         self._data["settings"].setdefault("compact_mode", False)
         self._data["settings"].setdefault("midi_fader_feedback", False)
+        self._data["settings"].setdefault("check_for_updates", True)
+        self._data["settings"].setdefault("update_dismissed_version", None)
         hw = self._data.setdefault("hardware", {})
         hw.setdefault("input_mode", "usb")
         hw.setdefault("midi_device", "")
@@ -690,6 +696,29 @@ class ConfigManager(QObject):
     def midi_fader_feedback(self, value: bool) -> None:
         self._data.setdefault("settings", {})["midi_fader_feedback"] = bool(value)
         self.settings_changed.emit()
+
+    @property
+    def check_for_updates(self) -> bool:
+        """Whether Windows/Flatpak may query GitHub for newer releases."""
+        return bool(self._data.get("settings", {}).get("check_for_updates", True))
+
+    @check_for_updates.setter
+    def check_for_updates(self, value: bool) -> None:
+        self._data.setdefault("settings", {})["check_for_updates"] = bool(value)
+
+    @property
+    def update_dismissed_version(self) -> str | None:
+        """Normalized remote version the user silenced until a newer one appears."""
+        raw = self._data.get("settings", {}).get("update_dismissed_version")
+        if raw is None or raw == "":
+            return None
+        return str(raw)
+
+    @update_dismissed_version.setter
+    def update_dismissed_version(self, value: str | None) -> None:
+        self._data.setdefault("settings", {})["update_dismissed_version"] = (
+            None if value is None or value == "" else str(value)
+        )
 
     def get_volume_exponent(self) -> float:
         """
