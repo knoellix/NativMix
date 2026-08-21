@@ -86,7 +86,15 @@ If a native package exists for your distro (AUR, OBS, etc.), that remains the pr
 
 **Requirements:** Linux with PipeWire or PulseAudio; for hardware faders, host access to serial devices (e.g. `/dev/ttyACM*`) must work on your system.
 
-Flatpak is not published on Flathub yet. Build and install locally from this repository — see [packaging/FLATPAK.md](packaging/FLATPAK.md) or the [Flatpak wiki page](https://github.com/knoelliX/NativMix/wiki/EN-Flatpak).
+Flatpak is not on Flathub yet. On each `v*` tag, CI attaches
+`NativMix-<version>.flatpak` to the [GitHub Release](https://github.com/knoelliX/NativMix/releases)
+(same idea as the Windows installer). Install with
+`flatpak install --user ./NativMix-<version>.flatpak`.
+
+**Updates:** a release `.flatpak` does **not** auto-update like pacman. For a new
+tag, download and install the new bundle again. Pacman-like `flatpak update`
+needs Flathub (or another Flatpak remote) later. Local builds: [packaging/FLATPAK.md](packaging/FLATPAK.md)
+or the [Flatpak wiki page](https://github.com/knoelliX/NativMix/wiki/EN-Flatpak).
 
 **Appearance:** The Flatpak does not use your native desktop theme — only a dedicated light/dark palette that follows your system light/dark preference (XDG portal, including live changes). Autostart in Flatpak uses the Background portal; native installs keep `~/.config/autostart/` / systemd.
 

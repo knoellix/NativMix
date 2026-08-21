@@ -1,9 +1,35 @@
-# Flatpak bootstrap (first test pass)
+# Flatpak bootstrap
 
-This repository now includes the Flatpak manifest at
+This repository includes the Flatpak manifest at
 `flatpak/net.knoellix.NativMix.yml`.
 The initial profile is intentionally permissive for hardware validation
 (audio, MIDI, Arduino/USB) and should be tightened after basic tests pass.
+
+## GitHub Release bundle (CI)
+
+On each `v*` tag, [`.github/workflows/build-flatpak.yml`](../.github/workflows/build-flatpak.yml)
+builds a single-file bundle and attaches it to the GitHub Release (same pattern
+as the Windows installer):
+
+`NativMix-<version>.flatpak`
+
+Install from a downloaded release asset:
+
+```bash
+flatpak install --user ./NativMix-1.0.18.flatpak
+flatpak run net.knoellix.NativMix
+```
+
+### Updates — not like pacman
+
+| Channel | How updates work |
+|---|---|
+| **AUR / OBS / pacman / zypper / …** | Distro package manager pulls the new version automatically |
+| **GitHub `.flatpak` bundle** | Manual: download the new release asset and `flatpak install` again (or uninstall + install). There is **no** `flatpak update` from GitHub Releases |
+| **Flathub / own Flatpak remote** (later) | `flatpak update` — closest to pacman-style updates |
+
+Until Flathub (or another OSTree remote) is set up, treat the release `.flatpak`
+like the Windows `.exe`: a versioned download per tag, not a live update channel.
 
 ## Local test build
 
@@ -37,7 +63,7 @@ Use build/repo directories on a native Linux filesystem (for example in
 current working directory. If the project is on `/mnt/...` but the build dir is
 in `$HOME`, this mismatch fails.
 
-Set `--state-dir` explicitly to a path in `$HOME` (same filesystem as build/repo).
+Pass `--state-dir` explicitly to a path in `$HOME` (same filesystem as build/repo).
 
 ## Runtime/SDK choice
 

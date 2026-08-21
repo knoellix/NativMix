@@ -86,7 +86,16 @@ Wenn ein natives Paket verfügbar ist (AUR, OBS, …), bleibt das der bevorzugte
 
 **Voraussetzungen:** Linux mit PipeWire oder PulseAudio; für Hardware-Regler muss der Host-Zugriff auf Serial-Geräte (z. B. `/dev/ttyACM*`) funktionieren.
 
-Auf Flathub ist NativMix noch nicht veröffentlicht. Lokal bauen und installieren aus diesem Repository — siehe [packaging/FLATPAK.md](https://github.com/knoelliX/NativMix/blob/main/packaging/FLATPAK.md) oder die [Flatpak-Wiki-Seite](https://github.com/knoelliX/NativMix/wiki/DE-Flatpak).
+Auf Flathub ist NativMix noch nicht. Bei jedem `v*`-Tag hängt CI
+`NativMix-<version>.flatpak` an den [GitHub Release](https://github.com/knoelliX/NativMix/releases)
+(analog zum Windows-Installer). Installation:
+`flatpak install --user ./NativMix-<version>.flatpak`.
+
+**Updates:** Ein Release-`.flatpak` aktualisiert sich **nicht** von selbst wie
+pacman. Neuer Tag → neues Bundle herunterladen und erneut installieren.
+Pacman-ähnliches `flatpak update` kommt erst mit Flathub (oder einem anderen
+Flatpak-Remote). Lokal bauen: [packaging/FLATPAK.md](https://github.com/knoelliX/NativMix/blob/main/packaging/FLATPAK.md)
+oder die [Flatpak-Wiki-Seite](https://github.com/knoelliX/NativMix/wiki/DE-Flatpak).
 
 **Erscheinungsbild:** Im Flatpak gibt es kein natives Desktop-Theme — nur eine eigene Hell/Dunkel-Palette über das XDG-Portal (auch bei Live-Wechsel). Autostart im Flatpak läuft über das Background-Portal; native Installationen behalten `~/.config/autostart/` / systemd.
 

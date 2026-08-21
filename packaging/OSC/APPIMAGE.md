@@ -5,76 +5,81 @@ Portable Bundle für „viele Distros“ über den **Open Build Service**, paral
 > **Nicht verwechseln mit Flatpak.** Flatpak bleibt lokal/`flatpak/` + Issue [#31](https://github.com/knoelliX/NativMix/issues/31).  
 > AppImage hier = OBS-Ziel **AppImage** (Many distros), siehe [OBS AppImage docs](https://docs.appimage.org/packaging-guide/hosted-services/opensuse-build-service.html).
 
-## Was du in der OBS-Web-UI einstellst
+## Status / Warnung (2026-08)
 
-1. Projekt öffnen (z. B. `home:knoellix:…` / euer NativMix-Projekt).
-2. **Repositories / Meta:** AppImage-Buildziel aktivieren (oft als **AppImage** / „Many distros“).
-3. Typisches Meta-Fragment (Namen anpassen — `HOMEPROJ` und ein RPM-Repo, aus dem das Paket `nativmix` kommt):
+OBS-AppImage für NativMix ist **noch nicht produktionsreif**.
+
+Der Leap-basierte `OBS:AppImage`-Stack und unser Tumbleweed-RPM kollidieren bei den Runtime-Deps:
+
+| Symptom | Ursache |
+|---|---|
+| `nothing provides nativmix` / `zsync` / `openSUSE-release` | Meta nur auf `OBS:AppImage/AppImage` — ohne eigenes RPM-Repo und ohne Leap-Variante |
+| Build baut nur `.rpm`, kein `.AppImage` | Projekt-Config fehlt `Type: appimage` |
+| `nothing provides python3-qt6` / `python3-python-rtmidi` | Ingredient `nativmix` zieht TW-Requires; Leap liefert höchstens `python311-qt6` (via `KDE:Qt:PyQt`), Factory-Mix zerlegt Preinstalls (`aaa_base` / `/bin/date`) |
+
+**Praktische Empfehlung:** Für portable/immutable Nutzer **Flatpak** nutzen. OBS-AppImage erst wieder anfassen, wenn entweder ein Leap-fähiges Ingredient (inkl. PyQt6-Closure) steht oder ein eigenes Bundle-Rezept ohne RPM-Requires-Expansion.
+
+## Was in OBS stehen muss (wenn du es trotzdem versuchst)
+
+### 1. Project Meta — Repository `AppImage`
 
 ```xml
 <repository name="AppImage">
-  <path project="HOMEPROJ" repository="openSUSE_Tumbleweed"/>
-  <path project="OBS:AppImage" repository="AppImage"/>
+  <path project="home:knoelliX" repository="openSUSE_Tumbleweed"/>
+  <path project="OBS:AppImage" repository="AppImage.leap_15.6"/>
   <arch>x86_64</arch>
 </repository>
 ```
 
-- `HOMEPROJ` + `openSUSE_Tumbleweed` (oder Leap): liefert das **RPM** `nativmix` als Ingredient.
-- `OBS:AppImage`: AppImage-Toolchain auf OBS.
-- ARM optional separat (`AppImage.arm`), siehe Upstream-Doku.
+- Erster Path: eigenes RPM (Ingredient `nativmix`).
+- Zweiter Path: **`AppImage.leap_15.6`** (nicht nur `AppImage`) — sonst fehlen `build-pkg2appimage` / `zsync` / `openSUSE-release`.
 
-4. Paket speichern / triggern — OBS baut neu, wenn Spec/Tag oder Ingredients sich ändern.
+### 2. Project Config (prjconf) — Pflicht
 
-Kein zweites „Many distros“-Geheimnis: das AppImage-Repo **ist** der portable Zielkanal.
+Ohne das baut OBS im AppImage-Repo nur ein normales RPM:
 
-## Dateien in diesem Ordner
+```
+%if "%_repository" == "AppImage"
+Type: appimage
+Repotype: staticlinks
+Patterntype: none
+
+Required: build-pkg2appimage
+
+Prefer: -libsystemd0-mini
+Prefer: -udev-mini
+Prefer: -libudev-mini1
+Prefer: -systemd-mini
+%endif
+```
+
+Setzen mit: `osc meta prjconf home:knoelliX -e` (bzw. `-F`).
+
+### 3. Paket-Dateien
 
 | Datei | Rolle |
 |---|---|
-| [`nativmix.spec`](nativmix.spec) + [`_service`](_service) | Wie bisher: RPM aus Git-Tag |
-| [`appimage.yml`](appimage.yml) | AppImage-Rezept: packt das RPM `nativmix` in eine `.AppImage` |
+| [`nativmix.spec`](nativmix.spec) + [`_service`](_service) | RPM aus Git-Tag |
+| [`appimage.yml`](appimage.yml) | AppImage-Rezept (`ingredients: [nativmix]`) |
 | Diese Datei | Maintainer-Schritte |
 
-### `_service` und AppImage
-
-Das bestehende `_service` (tar_scm / set_version / mido) bleibt für **RPM**.
-
-Für AppImage braucht OBS zusätzlich den Service `appimage`. Zwei saubere Varianten:
-
-**A — gleiches Paket (einfach):** In `_service` den Service ergänzen (neben den bestehenden):
+In `_service` zusätzlich:
 
 ```xml
 <service name="appimage"/>
 ```
 
-Dann baut dasselbe OBS-Paket RPM **und** AppImage (je nach aktivem Repository).
-
-**B — eigenes Paket `nativmix-appimage`:** Nur `appimage.yml` + `_service` mit `<service name="appimage"/>`, Ingredient zeigt auf RPM `nativmix` aus dem Schwesterpaket. Weniger Vermischung, etwas mehr Pflege.
-
-Empfehlung zum Start: **A**, solange ein Build grün ist.
-
 ## `appimage.yml` (Kurz)
 
-- `ingredients.packages: [nativmix]` — Inhalt aus dem OBS-RPM.
-- `binpatch: true` — Binary-Patch für portable Libs wo nötig.
-- Script kopiert `.desktop` und Icon an die AppImage-Wurzel (Pfade wie im Spec).
+- `ingredients.packages: [nativmix]` — OBS expandiert dabei auch die **Requires** des RPMs. Genau dort scheitert der Leap-Stack aktuell an `python3-qt6`.
+- Script kopiert `.desktop` + Icon an die AppImage-Wurzel.
 
-Nach dem ersten erfolgreichen Build: Artefakt von OBS laden und auf **mindestens einer fremden Distro** smoke-testen (PipeWire, MIDI, Arduino).
-
-## Checkliste nach Tag (z. B. v1.0.18)
-
-1. `_service` `revision` zeigt auf den neuen Tag (wie bei RPM).
-2. OBS: AppImage-Repo aktiv, Build grün.
-3. `.AppImage` herunterladen, `chmod +x`, starten.
-4. Hardware: Arduino + MIDI kurz prüfen (AppImage erbt Host-Rechte anders als Flatpak — Serial/MIDI am Host freigeben).
-5. Download-Link / Release-Notes optional verlinken.
-
-## Flatpak bleibt separat
+## Flatpak bleibt der portable Pfad
 
 | | OBS AppImage | Flatpak |
 |---|---|---|
 | Wo | dieses OBS-Projekt + `appimage.yml` | `flatpak/` + [`../FLATPAK.md`](../FLATPAK.md) |
-| UI in OBS | Repo **AppImage** | eigenes Flatpak-Rezept / Flathub (später #31) |
-| Preferiert | portable Binary | Sandbox / immutable |
+| Status | Meta/prjconf ok-ish, Dep-Closure blockiert | lokal baubar, Sandbox |
+| Preferiert | — | portable Fallback |
 
-Native OBS-RPM/DEB bleiben der **bevorzugte** Installationsweg; AppImage und Flatpak sind Fallbacks.
+Native OBS-RPM/DEB bleiben der **bevorzugte** Installationsweg.

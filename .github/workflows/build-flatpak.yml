@@ -1,0 +1,69 @@
+name: Build Flatpak Bundle
+
+# Same release model as Windows: on v* tags, build a .flatpak and attach it
+# to the GitHub Release. A single-file bundle is NOT a Flatpak remote —
+# users do not get pacman-like `flatpak update` until Flathub (or another
+# OSTree remote) is wired up. See packaging/FLATPAK.md.
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-flatpak:
+    name: Build Flatpak
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.8
+      options: --privileged
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Extract version
+        id: version
+        shell: bash
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "${REF_TYPE}" == "tag" ]]; then
+            V="${REF_NAME#v}"
+          else
+            V="$(grep -E '^__version__\s*=' lib/nativmix/metadata.py | head -1 | sed -E 's/^__version__\s*=\s*["'\'']([^"'\'']+)["'\''].*/\1/')"
+          fi
+          if [[ -z "${V}" ]]; then
+            echo "ERROR: could not determine version"
+            exit 1
+          fi
+          echo "VERSION=${V}" >> "$GITHUB_OUTPUT"
+          echo "Building Flatpak bundle for NativMix ${V}"
+
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: NativMix-${{ steps.version.outputs.VERSION }}.flatpak
+          manifest-path: flatpak/net.knoellix.NativMix.yml
+          cache-key: flatpak-builder-${{ hashFiles('flatpak/**') }}
+          upload-artifact: true
+
+      - name: Attach bundle to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "NativMix v${{ steps.version.outputs.VERSION }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: NativMix-${{ steps.version.outputs.VERSION }}.flatpak
+          fail_on_unmatched_files: true
