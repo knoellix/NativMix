@@ -94,3 +94,9 @@ override unless the active style is Fusion.
 7. Theme: tooltips are readable in both light and dark
 8. Theme: native install still uses Breeze/Kvantum (no forced Fusion palette)
 9. Flatpak: Settings autostart toggle creates/removes host desktop via portal
+
+## OBS AppImage (separate from Flatpak)
+
+Portable **AppImage** builds on OBS use a different path (Many distros / `OBS:AppImage`),
+not this Flatpak manifest. Maintainer steps and `appimage.yml`:
+[`OSC/APPIMAGE.md`](OSC/APPIMAGE.md).

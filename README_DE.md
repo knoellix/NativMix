@@ -38,7 +38,7 @@ NativMix ist ein hardwaregestützter Lautstärkemixer für Linux, entwickelt mit
 | **Pop!_OS**              | ✅ Stabil     | COSMIC Desktop, GUI getestet, keine Log-Fehler                                                   |
 | **openSUSE Tumbleweed**  | ✅ Stabil     | OBS-Paket, GUI getestet, keine Log-Fehler                                                        |
 | **openSUSE Slowroll**    | ❓ Ungetestet | OBS-Paket                                                                                        |
-| **Fedora 42 / 43**       | ✅ Stabil     | OBS-Paket, Grundfunktionen getestet — nutzt portmidi statt rtmidi (kein virtueller MIDI-Port)    |
+| **Fedora 42 / 43 / 44**  | ✅ Stabil     | OBS-Paket, Grundfunktionen getestet — nutzt portmidi statt rtmidi (kein virtueller MIDI-Port)    |
 | **Debian 12 / 13**       | ✅ Stabil     | OBS-Paket — basierend auf Ubuntu-Kompatibilität                                                  |
 | **Raspberry Pi OS**      | ❓ Ungetestet | OBS-Paket — keine Pi-Test-Hardware                                                               |
 | **Windows 10 / 11**      | ✅ Stabil     | GitHub-Release-Installer — vom Maintainer nicht täglich genutzt (kein V-Sink, kein Virtual MIDI) |

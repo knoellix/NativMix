@@ -38,7 +38,7 @@ NativMix is a hardware-based volume mixer for Linux, built with PyQt6. It connec
 | **Pop!_OS**              | ✅ Stable   | COSMIC desktop, GUI tested, no log errors                                                   |
 | **openSUSE Tumbleweed**  | ✅ Stable   | OBS package, GUI tested, no log errors                                                      |
 | **openSUSE Slowroll**    | ❓ Untested | OBS package                                                                                 |
-| **Fedora 42 / 43**       | ✅ Stable   | OBS package, core functions tested — uses portmidi instead of rtmidi (no virtual MIDI port) |
+| **Fedora 42 / 43 / 44**  | ✅ Stable   | OBS package, core functions tested — uses portmidi instead of rtmidi (no virtual MIDI port) |
 | **Debian 12 / 13**       | ✅ Stable   | OBS package — based on Ubuntu compatibility                                                 |
 | **Raspberry Pi OS**      | ❓ Untested | OBS package — no Pi test hardware available                                                 |
 | **Windows 10 / 11**      | ✅ Stable   | GitHub Release installer — not daily-driven by the maintainer (no V-Sinks, no virtual MIDI) |
