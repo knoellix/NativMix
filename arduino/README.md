@@ -100,6 +100,16 @@ app (profile load, IPC `--vol`, GUI slider, external volume events). Enable it i
 **Settings → Sync fader position to MIDI controller** (hybrid / MIDI-only modes;
 default off).
 
+The same toggle also drives **mute / LED feedback**:
+
+| Outbound | When | Values |
+|---|---|---|
+| Learned mute CC | Mute changes in the app (GUI, IPC, MIDI button) | 127 = muted, 0 = unmuted |
+| LED hue CC 32–35 | Mute CC is 5–8 (this sketch) | 0 = red (muted), 42 = green (unmuted) |
+
+NativMix suppresses mute-toggle echoes for a short window after sending mute
+feedback so the LED update does not re-trigger mute.
+
 Implementation notes:
 
 - **Feedback-loop protection:** when NativMix sends a CC to move a physical
@@ -107,7 +117,7 @@ Implementation notes:
   5 % deadband (similar to Arduino fader takeover / `--vol` IPC takeover).
 - **Physical device required:** outbound sync uses the matching MIDI output port
   of the configured input device. The Linux virtual port receives inbound only —
-  no outbound on virtual ports in v1.0.14.
+  no outbound on virtual ports.
 - **Throttling / dedupe:** identical CC values are not re-sent; inbound volume
   CC is throttled to 50 Hz per mapping.
 - **Learn mode:** outbound sync is not paused during MIDI-Learn yet; disable the

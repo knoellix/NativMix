@@ -9,6 +9,8 @@ All notable changes to NativMix are documented in this file.
 - Flatpak: Portal-based autostart (`org.freedesktop.portal.Background`); host autostart path unchanged
 - Fix: Apply channel mute when a mapped stream appears (incl. Other Apps catch-all); avoid always-unmute after reflex mute (#29)
 - Fix: Re-apply channel volume/routing when PipeWire resolves the app name late (no fader nudge needed)
+- Feat: MIDI volume/mute bindings store MIDI channel (0–15) + CC; Learn captures both; manual channel via ▼ menu on Learn/Mute (#30)
+- Feat: MIDI feedback (opt-in) also syncs mute state outbound — mute CC 0/127; Arduino example LEDs via hue CC 32–35 when mute CC is 5–8
 
 ## v1.0.17
 

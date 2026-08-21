@@ -634,6 +634,20 @@ def main() -> None:
         if targets:
             midi.request_fader_sync(targets)
 
+    def _push_midi_mute_feedback() -> None:
+        if not config.midi_fader_feedback or config.input_mode == "usb":
+            return
+        states: list[tuple[int, bool]] = []
+        seen: set[int] = set()
+        for ch_idx in config.get_all_midi_mute_mappings().values():
+            if ch_idx in seen:
+                continue
+            seen.add(ch_idx)
+            if hasattr(backend, "is_channel_muted"):
+                states.append((ch_idx, backend.is_channel_muted(ch_idx)))
+        if states:
+            midi.request_mute_feedback(states)
+
     # Live-Update for inversion flags and threshold without restart
     def _on_settings_changed() -> None:
         arduino.reload_settings(config)
@@ -648,6 +662,7 @@ def main() -> None:
         )
         midi.set_fader_feedback_enabled(config.midi_fader_feedback)
         _push_midi_fader_feedback()
+        _push_midi_mute_feedback()
 
     config.settings_changed.connect(_on_settings_changed)
     _on_settings_changed()  # initialize MIDI CCs and Arduino from startup profile
@@ -657,7 +672,16 @@ def main() -> None:
             _push_midi_fader_feedback([(channel_index, volume)])
 
     backend.channel_volume_changed.connect(_on_channel_volume_midi_feedback)
-    window.fader_display_synced.connect(lambda: _push_midi_fader_feedback())
+    window.fader_display_synced.connect(lambda: (_push_midi_fader_feedback(), _push_midi_mute_feedback()))
+
+    def _on_mute_state_midi_feedback(channel_index: int, is_muted: bool) -> None:
+        if not config.midi_fader_feedback or config.input_mode == "usb":
+            return
+        if config.get_midi_mute_cc(channel_index) is None:
+            return
+        midi.request_mute_feedback([(channel_index, is_muted)])
+
+    backend.mute_state_changed.connect(_on_mute_state_midi_feedback)
 
     def _switch_profile(target: str) -> None:
         """Handle profile switch from IPC, MIDI, or GUI."""
@@ -719,6 +743,7 @@ def main() -> None:
                     {i: ch.get("volume", 1.0) for i, ch in enumerate(channels) if not ch.get("is_midi", False)}
                 )
                 _push_midi_fader_feedback()
+                _push_midi_mute_feedback()
             elif arduino.has_real_data:
                 # No restore: immediately push current hardware positions to the
                 # new profile's apps. Without this, apps only update on the next
@@ -728,6 +753,7 @@ def main() -> None:
                 backend.apply_poti_volumes(hw_vols)
                 window.on_volumes_changed(hw_vols)
                 _push_midi_fader_feedback()
+                _push_midi_mute_feedback()
         except Exception:
             logger.exception("_switch_profile: error switching to %r", target)
 
@@ -760,7 +786,7 @@ def main() -> None:
         else:
             _profile_cc_learn_target = target
 
-    def _on_midi_cc_for_profile_learn(cc: int, val: int) -> None:
+    def _on_midi_cc_for_profile_learn(midi_ch: int, cc: int, val: int) -> None:
         nonlocal _profile_cc_learn_target
         try:
             if _profile_cc_learn_target is None or val != 127:
@@ -780,7 +806,12 @@ def main() -> None:
                         profile_manager.save_profile(p)
                     except Exception:
                         logger.exception("Error setting direct profile CC")
-            logger.info("Profile MIDI CC learned: target=%r cc=%d", target, cc)
+            logger.info(
+                "Profile MIDI CC learned: target=%r midi_ch=%d cc=%d",
+                target,
+                midi_ch,
+                cc,
+            )
             config.settings_changed.emit()
             _update_profile_settings_ui(profile_manager.active_profile_id)
             window.settings_panel.reset_cc_learn_buttons()
@@ -888,7 +919,7 @@ def main() -> None:
             # requestActivate() is kept in tray._show_window() and
             # _ipc_show_window() where the user explicitly requests focus.
             QTimer.singleShot(500, lambda: window.set_show_requested(False))
-        QTimer.singleShot(350, lambda: _push_midi_fader_feedback())
+        QTimer.singleShot(350, lambda: (_push_midi_fader_feedback(), _push_midi_mute_feedback()))
 
     coordinator.ready.connect(on_app_ready)
 

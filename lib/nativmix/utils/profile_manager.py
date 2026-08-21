@@ -14,9 +14,7 @@ _DEFAULT_CHANNELS_COUNT = 5
 
 def _next_profile_id(profiles_dir: Path) -> str:
     existing = {
-        int(p.stem.split("-")[1])
-        for p in profiles_dir.glob("profile-*.json")
-        if p.stem.split("-")[1].isdigit()
+        int(p.stem.split("-")[1]) for p in profiles_dir.glob("profile-*.json") if p.stem.split("-")[1].isdigit()
     }
     n = 1
     while n in existing:
@@ -33,6 +31,9 @@ def default_channels(count: int) -> list[dict[str, Any]]:
             "app_names": [],
             "midi_cc": None,
             "midi_mute_cc": None,
+            "midi_channel": 0,
+            "midi_mute_channel": 0,
+            "midi_bindings": [{"cc": None, "midi_channel": 0}],
             "inverted": False,
             "v_sink": False,
             "mode": "app",
@@ -52,7 +53,7 @@ class ProfileManager(QObject):
     in config.json and are NOT part of any profile.
     """
 
-    profile_changed = pyqtSignal(str)    # profile_id — emitted after every switch
+    profile_changed = pyqtSignal(str)  # profile_id — emitted after every switch
     profile_list_changed = pyqtSignal()  # emitted after create / rename / delete
 
     def __init__(
@@ -63,6 +64,7 @@ class ProfileManager(QObject):
         super().__init__(parent)
         if profiles_dir is None:
             from nativmix.utils.paths import get_config_dir
+
             profiles_dir = get_config_dir() / "profiles"
         self._dir = profiles_dir
         self._dir.mkdir(parents=True, exist_ok=True)
@@ -99,11 +101,13 @@ class ProfileManager(QObject):
         for p in sorted(self._dir.glob("profile-*.json")):
             try:
                 data = json.loads(p.read_text(encoding="utf-8"))
-                profiles.append({
-                    "id": data.get("id", p.stem),
-                    "name": data.get("name", p.stem),
-                    "channel_count": data.get("channel_count", 0),
-                })
+                profiles.append(
+                    {
+                        "id": data.get("id", p.stem),
+                        "name": data.get("name", p.stem),
+                        "channel_count": data.get("channel_count", 0),
+                    }
+                )
             except (json.JSONDecodeError, OSError) as exc:
                 logger.warning("Could not read profile %s: %s", p, exc)
         return profiles
@@ -119,8 +123,7 @@ class ProfileManager(QObject):
         path = self._dir / f"{profile['id']}.json"
         tmp = path.with_suffix(".json.tmp")
         try:
-            tmp.write_text(json.dumps(profile, indent=2, ensure_ascii=False) + "\n",
-                           encoding="utf-8")
+            tmp.write_text(json.dumps(profile, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             tmp.replace(path)
         except OSError as exc:
             logger.error("Failed to write profile %s: %s", profile.get("id"), exc)
@@ -276,6 +279,8 @@ class ProfileManager(QObject):
             new_id = self.create(candidate, channel_count=hw_channel_count)
             logger.info(
                 "Hardware has %d channels, active profile needs %d — auto-created %s",
-                hw_channel_count, active["channel_count"], new_id,
+                hw_channel_count,
+                active["channel_count"],
+                new_id,
             )
             self.switch(new_id)

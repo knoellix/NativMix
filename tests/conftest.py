@@ -54,6 +54,8 @@ def make_profile(
                 "app_names": [],
                 "midi_cc": None,
                 "midi_mute_cc": None,
+                "midi_channel": 0,
+                "midi_mute_channel": 0,
                 "inverted": False,
                 "v_sink": False,
                 "mode": "app",

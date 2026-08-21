@@ -1535,6 +1535,7 @@ class PipeWireManager(AudioBackendBase):
                         self._apply_volume_by_name(name, volume)
 
         self._update_thread_states()
+        self.channel_volume_changed.emit(channel_index, volume)
 
     def _set_v_sink_volume(self, channel_index: int, volume: float, pulse: pulsectl.Pulse | None = None) -> None:
         """
@@ -1729,6 +1730,11 @@ class PipeWireManager(AudioBackendBase):
                     _do_apply(p)
         except pulsectl.PulseError as exc:
             logger.error("Failed to apply hardware volume to %s: %s", hw_id, exc)
+
+    def is_channel_muted(self, channel_index: int) -> bool:
+        """Return True if the mixer channel is currently muted."""
+        with self._state_lock:
+            return bool(self._channel_muted.get(channel_index, False))
 
     def toggle_mute(self, channel_index: int) -> None:
         """

@@ -109,6 +109,7 @@ flatpak run net.knoellix.NativMix
 
 - Flatpak: Manifest/Doku, Fusion Hell/Dunkel via Portal, Portal-Autostart
 - Fix: Channel-Mute (und spätes Volume/Routing) beim Stream-Auftauchen, inkl. Other Apps (#29)
+- Feat: MIDI-Kanal (1–16) an Learn/Mute; optionales Mute-/LED-Feedback mit Fader-Sync
 
 **v1.0.17**
 

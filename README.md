@@ -111,6 +111,7 @@ flatpak run net.knoellix.NativMix
 
 - Flatpak: local manifest/docs, Fusion light/dark via portal, portal autostart
 - Fix: restore channel mute (and late volume/routing) when mapped streams appear, including Other Apps (#29)
+- Feat: MIDI channel (1–16) on Learn/Mute; optional mute/LED feedback with fader sync
 
 **v1.0.17**
 

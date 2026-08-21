@@ -38,8 +38,11 @@ Schema (v6)
             "label": null,        // custom display name
             "v_sink": false,
             "volume": 1.0,        // last known fader position
-            "midi_cc": null,      // assigned CC number for volume
-            "midi_mute_cc": null  // assigned CC number for mute toggle
+            "midi_cc": null,      // legacy alias for midi_bindings[0].cc
+            "midi_channel": 0,    // legacy alias for midi_bindings[0].midi_channel
+            "midi_bindings": [{"cc": null, "midi_channel": 0}],  // one volume Learn slot
+            "midi_mute_cc": null, // assigned CC number for mute toggle
+            "midi_mute_channel": 0
         },
         ...
     ]
@@ -77,6 +80,7 @@ SPECIAL_APPS: frozenset[str] = frozenset({"system master", "other apps"})
 # Default configuration
 # ---------------------------------------------------------------------------
 
+
 def _default_settings(num_channels: int = 5) -> dict[str, Any]:
     """Return default global settings."""
     return {
@@ -108,7 +112,7 @@ def _default_config(num_channels: int = 5) -> dict[str, Any]:
     return {
         "version": CONFIG_VERSION,
         "hardware": {
-            "port": None,         # None → auto-detect
+            "port": None,  # None → auto-detect
             "auto_search_device": True,  # True → try to auto-detect even with port set
             "num_channels": num_channels,
             "input_mode": "usb",  # "usb", "hybrid", "midi_only"
@@ -123,10 +127,14 @@ def _default_config(num_channels: int = 5) -> dict[str, Any]:
                 "inverted": False,
                 "v_sink": False,
                 "mode": "app",
-                "midi_cc": None,  # MIDI Control Change number (0-127)
+                "midi_cc": None,  # Legacy alias for midi_bindings[0].cc
+                "midi_mute_cc": None,
+                "midi_channel": 0,  # Legacy alias for midi_bindings[0].midi_channel
+                "midi_mute_channel": 0,
+                "midi_bindings": [{"cc": None, "midi_channel": 0}],
                 "hardware_id": None,
                 "app_names": [],
-                "volume": 1.0,    # Last known volume [0.0, 1.0]
+                "volume": 1.0,  # Last known volume [0.0, 1.0]
             }
             for i in range(num_channels)
         ],
@@ -136,6 +144,7 @@ def _default_config(num_channels: int = 5) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # ConfigManager
 # ---------------------------------------------------------------------------
+
 
 class ConfigManager(QObject):
     """
@@ -165,8 +174,8 @@ class ConfigManager(QObject):
     changes go through this class and are applied via Qt signals.
     """
 
-    mapping_changed = pyqtSignal(int, list)   # channel_index, new app_names list
-    settings_changed = pyqtSignal()           # any global setting changed
+    mapping_changed = pyqtSignal(int, list)  # channel_index, new app_names list
+    settings_changed = pyqtSignal()  # any global setting changed
 
     def __init__(
         self,
@@ -251,6 +260,7 @@ class ConfigManager(QObject):
 
             # Add current app version to the data before saving
             from nativmix.metadata import __version__
+
             self._data["app_version"] = __version__
 
             data_to_write = {k: v for k, v in self._data.items() if k != "channels"}
@@ -369,8 +379,7 @@ class ConfigManager(QObject):
         hw.setdefault("midi_channel_count", 0)
         if hw.get("midi_channel_count", 0) == 5:
             has_midi_usage = any(
-                ch.get("midi_cc") is not None or ch.get("is_midi", False)
-                for ch in self._data.get("channels", [])
+                ch.get("midi_cc") is not None or ch.get("is_midi", False) for ch in self._data.get("channels", [])
             )
             if not has_midi_usage:
                 hw["midi_channel_count"] = 0
@@ -391,6 +400,7 @@ class ConfigManager(QObject):
         # v6 → v7: move channels[] out of config.json into a profile file
         if version < 7:
             from nativmix.utils.profile_manager import ProfileManager, default_channels
+
             pm = ProfileManager(profiles_dir=self._profiles_dir)
             old_channels = self._data.pop("channels", [])
             if not old_channels:
@@ -490,25 +500,30 @@ class ConfigManager(QObject):
         # Pad with empty dictionaries if needed
         while len(channels) < n:
             idx = len(channels)
-            channels.append({
-                "index": idx,
-                "is_midi": False,
-                "inverted": inv_map[idx] if idx < len(inv_map) else False,
-                "v_sink": v_sink_map[idx] if idx < len(v_sink_map) else False,
-                "mode": "app",
-                "hardware_id": None,
-                "midi_cc": None,
-                "midi_mute_cc": None,
-                "app_names": [],
-                "volume": 1.0,
-            })
+            channels.append(
+                {
+                    "index": idx,
+                    "is_midi": False,
+                    "inverted": inv_map[idx] if idx < len(inv_map) else False,
+                    "v_sink": v_sink_map[idx] if idx < len(v_sink_map) else False,
+                    "mode": "app",
+                    "hardware_id": None,
+                    "midi_cc": None,
+                    "midi_mute_cc": None,
+                    "midi_channel": 0,
+                    "midi_mute_channel": 0,
+                    "midi_bindings": [{"cc": None, "midi_channel": 0}],
+                    "app_names": [],
+                    "volume": 1.0,
+                }
+            )
 
         # Retroactively apply is_midi flag strictly based on index vs hw_count.
         # Channels 0 to (hw_count-1) are ALWAYS USB/Hardware.
         # Channels >= hw_count are ALWAYS MIDI.
         # This stability is CRITICAL for the UI to correctly add/remove buttons.
         for idx, ch in enumerate(channels):
-            ch["is_midi"] = (idx >= hw_count)
+            ch["is_midi"] = idx >= hw_count
             ch["index"] = idx
 
     @property
@@ -676,7 +691,6 @@ class ConfigManager(QObject):
         self._data.setdefault("settings", {})["midi_fader_feedback"] = bool(value)
         self.settings_changed.emit()
 
-
     def get_volume_exponent(self) -> float:
         """
         Power-law exponent for the fader curve (1.0 = linear, 2.0 = quadratic, 3.0 = cubic).
@@ -754,16 +768,22 @@ class ConfigManager(QObject):
             elif mode == "hybrid" and idx >= hw_count:
                 is_midi = True
 
-            channels.append({
-                "index": idx,
-                "is_midi": is_midi,
-                "inverted": False,
-                "v_sink": False,
-                "mode": "app",
-                "midi_cc": None,
-                "hardware_id": None,
-                "app_names": [],
-            })
+            channels.append(
+                {
+                    "index": idx,
+                    "is_midi": is_midi,
+                    "inverted": False,
+                    "v_sink": False,
+                    "mode": "app",
+                    "midi_cc": None,
+                    "midi_mute_cc": None,
+                    "midi_channel": 0,
+                    "midi_mute_channel": 0,
+                    "midi_bindings": [{"cc": None, "midi_channel": 0}],
+                    "hardware_id": None,
+                    "app_names": [],
+                }
+            )
         return channels[index]
 
     def get_app_names(self, channel: int) -> list[str]:
@@ -834,7 +854,6 @@ class ConfigManager(QObject):
         self.mapping_changed.emit(channel_index, list(target_names))
         logger.debug("update_mapping: '%s' → channel %d", app_name, channel_index)
 
-
     def add_app_name(self, channel: int, name: str) -> None:
         """Add *name* to the app list of *channel* (no duplicates)."""
         names = self.get_app_names(channel)
@@ -859,9 +878,7 @@ class ConfigManager(QObject):
         """
         self._channel(channel)["inverted"] = inverted
         # Keep invert_map in sync
-        inv = self._data.setdefault("settings", {}).setdefault(
-            "invert_map", [False] * self.num_channels
-        )
+        inv = self._data.setdefault("settings", {}).setdefault("invert_map", [False] * self.num_channels)
         while len(inv) <= channel:
             inv.append(False)
         inv[channel] = inverted
@@ -886,13 +903,12 @@ class ConfigManager(QObject):
                 raise ValueError("Not allowed")
 
         self._channel(channel)["v_sink"] = enabled
-        vm = self._data.setdefault("settings", {}).setdefault(
-            "v_sink_map", [False] * self.num_channels
-        )
+        vm = self._data.setdefault("settings", {}).setdefault("v_sink_map", [False] * self.num_channels)
         while len(vm) <= channel:
             vm.append(False)
         vm[channel] = enabled
         self.settings_changed.emit()
+
     def get_all_assigned_apps_by_name(self) -> dict[str, int]:
         """
         Return a reverse map of {app_name_lower: channel_index} for all
@@ -904,7 +920,6 @@ class ConfigManager(QObject):
             for name in ch.get("app_names", []):
                 mapping[name.lower()] = ch_idx
         return mapping
-
 
     def find_channel_for_app(self, app_name: str) -> int | None:
         """
@@ -919,7 +934,6 @@ class ConfigManager(QObject):
             Zero-based channel index, or None if no mapping exists.
         """
         return self.get_all_assigned_apps_by_name().get(app_name.lower())
-
 
     # ------------------------------------------------------------------
     # Logging Configuration
@@ -974,32 +988,142 @@ class ConfigManager(QObject):
     # MIDI CC Mappings
     # ------------------------------------------------------------------
 
-    def get_midi_cc(self, channel: int) -> int | None:
-        """Return the assigned MIDI CC number for *channel*."""
-        val = self._channel(channel).get("midi_cc")
-        return int(val) if val is not None else None
+    _MAX_MIDI_BINDINGS = 1  # Single volume Learn per strip (multi-slot UI removed)
 
-    def set_midi_cc(self, channel: int, cc: int | None) -> None:
-        """Assign a MIDI CC number to *channel* and save."""
-        self._channel(channel)["midi_cc"] = cc
+    @staticmethod
+    def _empty_midi_binding() -> dict[str, Any]:
+        return {"cc": None, "midi_channel": 0}
+
+    def _normalize_midi_binding(self, raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            return self._empty_midi_binding()
+        cc_raw = raw.get("cc")
+        cc = int(cc_raw) if cc_raw is not None else None
+        try:
+            midi_ch = int(raw.get("midi_channel", 0))
+        except (TypeError, ValueError):
+            midi_ch = 0
+        return {"cc": cc, "midi_channel": max(0, min(15, midi_ch))}
+
+    def _sync_legacy_midi_volume_fields(self, ch: dict[str, Any]) -> None:
+        """Keep midi_cc / midi_channel mirrors in sync with bindings[0]."""
+        bindings = ch.get("midi_bindings") or [self._empty_midi_binding()]
+        first = self._normalize_midi_binding(bindings[0] if bindings else None)
+        ch["midi_cc"] = first["cc"]
+        ch["midi_channel"] = first["midi_channel"]
+
+    def _ensure_midi_bindings(self, ch: dict[str, Any]) -> list[dict[str, Any]]:
+        """
+        Ensure midi_bindings exists (migrate legacy midi_cc / midi_channel).
+
+        Always stores a single binding (length 1). Extra slots from older
+        multi-learn configs are discarded.
+        """
+        raw = ch.get("midi_bindings")
+        if isinstance(raw, list) and raw:
+            bindings = [self._normalize_midi_binding(raw[0])]
+        else:
+            cc_raw = ch.get("midi_cc")
+            cc = int(cc_raw) if cc_raw is not None else None
+            try:
+                midi_ch = int(ch.get("midi_channel", 0))
+            except (TypeError, ValueError):
+                midi_ch = 0
+            bindings = [{"cc": cc, "midi_channel": max(0, min(15, midi_ch))}]
+        ch["midi_bindings"] = bindings
+        self._sync_legacy_midi_volume_fields(ch)
+        return bindings
+
+    def get_midi_binding_count(self, channel: int) -> int:
+        """Number of volume Learn slots (always 1)."""
+        self._ensure_midi_bindings(self._channel(channel))
+        return 1
+
+    def set_midi_binding_count(self, channel: int, count: int) -> None:
+        """Kept for API compatibility; always forces a single Learn slot."""
+        del count
+        ch = self._channel(channel)
+        bindings = self._ensure_midi_bindings(ch)
+        ch["midi_bindings"] = bindings[:1]
+        self._sync_legacy_midi_volume_fields(ch)
         self.save()
         self.settings_changed.emit()
 
-    def get_all_midi_mappings(self) -> dict[int, int]:
-        """Return a mapping of CC number -> channel index for all MIDI channels."""
-        mappings = {}
+    def get_midi_binding(self, channel: int, slot: int = 0) -> dict[str, Any]:
+        """Return ``{cc, midi_channel}`` for volume Learn *slot*."""
+        bindings = self._ensure_midi_bindings(self._channel(channel))
+        if slot < 0 or slot >= len(bindings):
+            return self._empty_midi_binding()
+        return dict(bindings[slot])
+
+    def set_midi_binding(
+        self,
+        channel: int,
+        slot: int,
+        cc: int | None,
+        midi_channel: int | None = None,
+    ) -> None:
+        """Set volume Learn *slot* to *cc* / *midi_channel* (0–15)."""
+        ch = self._channel(channel)
+        bindings = self._ensure_midi_bindings(ch)
+        if slot < 0 or slot >= len(bindings):
+            logger.warning("set_midi_binding: invalid slot %d for channel %d", slot, channel)
+            return
+        entry = dict(bindings[slot])
+        entry["cc"] = int(cc) if cc is not None else None
+        if midi_channel is not None:
+            entry["midi_channel"] = max(0, min(15, int(midi_channel)))
+        elif cc is None:
+            entry["midi_channel"] = 0
+        bindings[slot] = entry
+        ch["midi_bindings"] = bindings
+        self._sync_legacy_midi_volume_fields(ch)
+        self.save()
+        self.settings_changed.emit()
+
+    def get_midi_cc(self, channel: int) -> int | None:
+        """Return volume CC for slot 0 (legacy alias)."""
+        return self.get_midi_binding(channel, 0).get("cc")
+
+    def get_midi_channel(self, channel: int) -> int:
+        """Return MIDI channel (0–15) for volume slot 0 (legacy alias)."""
+        return int(self.get_midi_binding(channel, 0).get("midi_channel", 0))
+
+    def set_midi_cc(
+        self,
+        channel: int,
+        cc: int | None,
+        midi_channel: int | None = None,
+    ) -> None:
+        """Assign volume CC on slot 0 (legacy alias)."""
+        self.set_midi_binding(channel, 0, cc, midi_channel=midi_channel)
+
+    def set_midi_channel(self, channel: int, midi_channel: int) -> None:
+        """Set MIDI channel for volume slot 0 without changing the CC."""
+        binding = self.get_midi_binding(channel, 0)
+        self.set_midi_binding(channel, 0, binding.get("cc"), midi_channel=midi_channel)
+
+    def get_all_midi_mappings(self) -> dict[tuple[int, int], int]:
+        """Return (midi_channel, cc) -> NativMix channel index for all volume slots."""
+        mappings: dict[tuple[int, int], int] = {}
         for ch in self._data.get("channels", []):
-            if ch.get("is_midi", False):
-                cc = ch.get("midi_cc")
-                if cc is not None:
-                    mappings[int(cc)] = int(ch["index"])
+            if not ch.get("is_midi", False):
+                continue
+            bindings = self._ensure_midi_bindings(ch)
+            for binding in bindings:
+                cc = binding.get("cc")
+                if cc is None:
+                    continue
+                midi_ch = int(binding.get("midi_channel", 0))
+                mappings[(midi_ch, int(cc))] = int(ch["index"])
         return mappings
 
     def get_midi_fader_feedback_targets(self) -> list[tuple[int, float]]:
-        """Return (channel_index, volume) pairs for all channels with a volume CC."""
+        """Return (channel_index, volume) for channels with any volume CC binding."""
         targets: list[tuple[int, float]] = []
         for idx in range(self.num_channels):
-            if self.get_midi_cc(idx) is not None:
+            bindings = self._ensure_midi_bindings(self._channel(idx))
+            if any(b.get("cc") is not None for b in bindings):
                 targets.append((idx, self.get_channel_volume(idx)))
         return targets
 
@@ -1008,25 +1132,55 @@ class ConfigManager(QObject):
         val = self._channel(channel).get("midi_mute_cc")
         return int(val) if val is not None else None
 
-    def set_midi_mute_cc(self, channel: int, cc: int | None) -> None:
-        """Assign a MIDI CC number as the mute-toggle for *channel* and save."""
-        self._channel(channel)["midi_mute_cc"] = cc
+    def get_midi_mute_channel(self, channel: int) -> int:
+        """Return MIDI channel (0-15) for the mute CC binding; default 0."""
+        val = self._channel(channel).get("midi_mute_channel", 0)
+        try:
+            ch = int(val)
+        except (TypeError, ValueError):
+            return 0
+        return max(0, min(15, ch))
+
+    def set_midi_mute_cc(
+        self,
+        channel: int,
+        cc: int | None,
+        midi_channel: int | None = None,
+    ) -> None:
+        """Assign a mute-toggle MIDI CC (and optional MIDI channel 0-15)."""
+        ch = self._channel(channel)
+        ch["midi_mute_cc"] = cc
+        if midi_channel is not None:
+            ch["midi_mute_channel"] = max(0, min(15, int(midi_channel)))
+        elif cc is None:
+            ch["midi_mute_channel"] = 0
         self.save()
         self.settings_changed.emit()
 
-    def get_all_midi_mute_mappings(self) -> dict[int, int]:
-        """Return CC number -> channel index for all mute-CC assignments.
+    def set_midi_mute_channel(self, channel: int, midi_channel: int) -> None:
+        """Set MIDI channel (0-15) for the mute CC without changing the CC number."""
+        self._channel(channel)["midi_mute_channel"] = max(0, min(15, int(midi_channel)))
+        self.save()
+        self.settings_changed.emit()
+
+    def get_all_midi_mute_mappings(self) -> dict[tuple[int, int], int]:
+        """Return (midi_channel, cc) -> channel index for mute-CC assignments.
 
         Intentionally does not filter by is_midi: if a channel's is_midi flag
         is temporarily wrong (e.g. after hw channel-count oscillation), the
         binding must still survive.  Only MIDI widgets can set midi_mute_cc,
         so non-MIDI channels will never have a value here in practice.
         """
-        mappings = {}
+        mappings: dict[tuple[int, int], int] = {}
         for ch in self._data.get("channels", []):
             cc = ch.get("midi_mute_cc")
             if cc is not None:
-                mappings[int(cc)] = int(ch["index"])
+                try:
+                    midi_ch = int(ch.get("midi_mute_channel", 0))
+                except (TypeError, ValueError):
+                    midi_ch = 0
+                midi_ch = max(0, min(15, midi_ch))
+                mappings[(midi_ch, int(cc))] = int(ch["index"])
         return mappings
 
     def clear_usb_channel_mappings(self) -> None:

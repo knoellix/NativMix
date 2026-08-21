@@ -37,18 +37,17 @@ logger = logging.getLogger(__name__)
 try:
     import psutil  # noqa: F401 (used inside helper functions)
     from pycaw.utils import AudioUtilities
+
     _WASAPI_AVAILABLE = True
 except ImportError:
     _WASAPI_AVAILABLE = False
-    logger.warning(
-        "pycaw or psutil not installed — WASAPI backend unavailable. "
-        "Run: pip install \"nativmix[windows]\""
-    )
+    logger.warning('pycaw or psutil not installed — WASAPI backend unavailable. Run: pip install "nativmix[windows]"')
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _session_name(session) -> str:
     """
@@ -62,6 +61,7 @@ def _session_name(session) -> str:
         pid = session.ProcessId
         if pid and pid != 0:
             from nativmix.utils.proc_resolver import resolve_app_name_windows
+
             name = resolve_app_name_windows(pid, fallback="")
             if name:
                 return name
@@ -110,6 +110,7 @@ def _get_sessions() -> list:
 # Background listener thread
 # ---------------------------------------------------------------------------
 
+
 class _WasapiListenerThread(QThread):
     """
     Polls Windows Audio Sessions every 150 ms to detect new / removed streams.
@@ -118,10 +119,10 @@ class _WasapiListenerThread(QThread):
     WasapiManager can apply the Two-Stage Mute-Catch.
     """
 
-    stream_added   = pyqtSignal(object)   # StreamInfo
-    stream_removed = pyqtSignal(int)      # pid
+    stream_added = pyqtSignal(object)  # StreamInfo
+    stream_removed = pyqtSignal(int)  # pid
     audit_finished = pyqtSignal()
-    status_changed = pyqtSignal(str, str) # (status_type, message)
+    status_changed = pyqtSignal(str, str)  # (status_type, message)
 
     _POLL_INTERVAL_MS = 250
 
@@ -142,6 +143,7 @@ class _WasapiListenerThread(QThread):
         # COM must be initialised per-thread on Windows.
         try:
             import comtypes
+
             comtypes.CoInitialize()
             _com_init = True
         except Exception as exc:
@@ -171,6 +173,7 @@ class _WasapiListenerThread(QThread):
         if _com_init:
             try:
                 import comtypes
+
                 comtypes.CoUninitialize()
             except Exception:
                 pass
@@ -222,23 +225,25 @@ class _WasapiListenerThread(QThread):
 # WasapiManager
 # ---------------------------------------------------------------------------
 
+
 class WasapiManager(AudioBackendBase):
     """
     Windows audio backend.  Mirrors the public API of PipeWireManager so that
     main.py needs no platform-specific code beyond the instantiation switch.
     """
 
-    mute_state_changed    = pyqtSignal(int, bool)
+    mute_state_changed = pyqtSignal(int, bool)
     channel_volume_changed = pyqtSignal(int, float)
-    other_apps_changed    = pyqtSignal(list)
-    audit_finished        = pyqtSignal()
-    status_changed        = pyqtSignal(str, str)
+    other_apps_changed = pyqtSignal(list)
+    audit_finished = pyqtSignal()
+    status_changed = pyqtSignal(str, str)
 
     def __init__(self, config: ConfigManager | None = None, parent=None) -> None:
         super().__init__(parent)
         # Lazy import to avoid circular dependency at module load time
         if config is None:
             from nativmix.utils.config_manager import ConfigManager as _CM
+
             config = _CM()
         self._config: ConfigManager = config
         self._thread: _WasapiListenerThread | None = None
@@ -338,6 +343,12 @@ class WasapiManager(AudioBackendBase):
                 self._do_toggle_mute(channel_index)
             self._poti_volumes[channel_index] = volume
             self._apply_channel_volume(channel_index, volume)
+        self.channel_volume_changed.emit(channel_index, volume)
+
+    def is_channel_muted(self, channel_index: int) -> bool:
+        """Return True if the mixer channel is currently muted."""
+        with self._state_lock:
+            return bool(self._channel_muted.get(channel_index, False))
 
     def toggle_mute(self, channel_index: int) -> None:
         """Toggle the mute state of a channel (IPC hotkey / GUI button)."""
@@ -389,7 +400,10 @@ class WasapiManager(AudioBackendBase):
             self._apply_mute_by_name(info.app_name, muted)
             logger.debug(
                 "Two-Stage: applied vol=%.2f muted=%s to %s (ch=%d)",
-                vol, muted, info.app_name, ch,
+                vol,
+                muted,
+                info.app_name,
+                ch,
             )
         except Exception:
             logger.exception("_on_stream_added: unhandled exception for %s", info.app_name)
@@ -428,13 +442,15 @@ class WasapiManager(AudioBackendBase):
             except Exception as exc:
                 logger.debug("get_active_streams: could not read session volume/mute: %s", exc)
                 vol, muted = 1.0, False
-            result.append(StreamInfo(
-                index=idx,
-                app_name=name,
-                pid=session.ProcessId,
-                volume=vol,
-                muted=muted,
-            ))
+            result.append(
+                StreamInfo(
+                    index=idx,
+                    app_name=name,
+                    pid=session.ProcessId,
+                    volume=vol,
+                    muted=muted,
+                )
+            )
         return result
 
     def get_real_sinks(self) -> list[tuple[str, str]]:
@@ -447,6 +463,7 @@ class WasapiManager(AudioBackendBase):
             return []
         try:
             from pycaw.utils import AudioUtilities
+
             device = AudioUtilities.GetSpeakers()
             # Use the device's friendly name as both label and id
             name = getattr(device, "FriendlyName", None) or "Default Audio Output"
@@ -558,6 +575,7 @@ class WasapiManager(AudioBackendBase):
 
                 from comtypes import CLSCTX_ALL
                 from pycaw.api.endpointvolume import IAudioEndpointVolume
+
                 devices = AudioUtilities.GetSpeakers()
                 interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
                 self._endpoint_volume = cast(interface, POINTER(IAudioEndpointVolume))

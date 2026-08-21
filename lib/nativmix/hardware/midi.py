@@ -20,6 +20,21 @@ logger = logging.getLogger(__name__)
 # Ignore inbound mapped fader CC while within this band of the last outbound sync.
 _FADER_FEEDBACK_TOLERANCE = 0.05
 
+# Arduino example sketch (nativmix_midi_controller.ino) LED hue encoding.
+_LED_HUE_MUTED = 0
+_LED_HUE_UNMUTED = 42
+_EXAMPLE_MUTE_CC_MIN = 5
+_EXAMPLE_MUTE_CC_MAX = 8
+_EXAMPLE_LED_CC_BASE = 32
+_MUTE_OUTBOUND_SUPPRESS_S = 0.15
+
+
+def _example_led_cc_for_mute(mute_cc: int) -> int | None:
+    """Map example mute CC 5–8 → LED hue CC 32–35; else None."""
+    if _EXAMPLE_MUTE_CC_MIN <= mute_cc <= _EXAMPLE_MUTE_CC_MAX:
+        return _EXAMPLE_LED_CC_BASE + (mute_cc - _EXAMPLE_MUTE_CC_MIN)
+    return None
+
 
 def _inbound_fader_suppressed(takeover_volume: float | None, cc_value: int) -> bool:
     """Return True when an inbound CC likely echoes our own outbound fader sync."""
@@ -47,29 +62,33 @@ def ensure_midi_backend() -> str | None:
     if sys.platform == "win32":
         try:
             import rtmidi  # noqa: F401
-            mido.set_backend('mido.backends.rtmidi')
-            return 'rtmidi'
+
+            mido.set_backend("mido.backends.rtmidi")
+            return "rtmidi"
         except ImportError:
             return None
 
     from nativmix.utils.distro import is_fedora
-    backends_to_try = ['portmidi', 'rtmidi'] if is_fedora() else ['rtmidi', 'portmidi']
+
+    backends_to_try = ["portmidi", "rtmidi"] if is_fedora() else ["rtmidi", "portmidi"]
 
     for b_name in backends_to_try:
         try:
-            if b_name == 'rtmidi':
+            if b_name == "rtmidi":
                 import rtmidi  # noqa: F401
-                mido.set_backend('mido.backends.rtmidi')
-                return 'rtmidi'
+
+                mido.set_backend("mido.backends.rtmidi")
+                return "rtmidi"
             else:
                 import ctypes
                 import ctypes.util
-                _lib = ctypes.util.find_library('portmidi')
+
+                _lib = ctypes.util.find_library("portmidi")
                 if not _lib:
                     raise ImportError("libportmidi.so not found")
                 ctypes.CDLL(_lib)
-                mido.set_backend('mido.backends.portmidi')
-                return 'portmidi'
+                mido.set_backend("mido.backends.portmidi")
+                return "portmidi"
         except (ImportError, OSError):
             continue
     return None
@@ -84,14 +103,14 @@ class MidiThread(QThread):
     midi_volumes_changed(list[tuple[int, float]])
         Emitted when mapped MIDI CC values change.
         List of (channel_index, volume_0_to_1).
-    midi_cc_received(int, int)
-        Emitted for the "Learn" handshake: (control_number, value).
+    midi_cc_received(int, int, int)
+        Emitted for the "Learn" handshake: (midi_channel, control_number, value).
     connection_changed(bool)
         Emitted when the device is opened (True) or closed/missing (False).
     """
 
     midi_volumes_changed = pyqtSignal(list)  # list[tuple[int, float]]
-    midi_cc_received = pyqtSignal(int, int)
+    midi_cc_received = pyqtSignal(int, int, int)  # midi_channel, cc, value
     midi_mute_toggled = pyqtSignal(int)  # channel_index
     connection_changed = pyqtSignal(bool)
     # Status signal: (status_type, display_message)
@@ -99,6 +118,7 @@ class MidiThread(QThread):
     status_changed = pyqtSignal(str, str)
     profile_switch_requested = pyqtSignal(str)  # "next", "prev", or profile_id
     fader_sync_requested = pyqtSignal(list)  # list[tuple[int, float]] (channel, volume)
+    mute_feedback_requested = pyqtSignal(list)  # list[tuple[int, bool]] (channel, muted)
 
     def __init__(self, device_name: str = "", input_mode: str = "hybrid", parent=None) -> None:
         super().__init__(parent)
@@ -108,10 +128,12 @@ class MidiThread(QThread):
         self._panic_flag: bool = False
         self._critical_error: bool = False
         self._error_count: int = 0
-        self._cc_map: dict[int, int] = {}       # cc_number -> channel_index (volume)
-        self._mute_cc_map: dict[int, int] = {}  # cc_number -> channel_index (mute toggle)
-        self._last_values: dict[int, int] = {}  # cc_number -> last_seen_value (0-127)
-        self._last_vol_emit: dict[int, float] = {}  # cc_number -> monotonic time of last emit
+        # (midi_channel, cc) -> NativMix channel_index
+        self._cc_map: dict[tuple[int, int], int] = {}
+        self._mute_cc_map: dict[tuple[int, int], int] = {}
+        self._map_lock = threading.RLock()
+        self._last_values: dict[tuple[int, int], int] = {}
+        self._last_vol_emit: dict[tuple[int, int], float] = {}
         # Persistent virtual port – kept alive across USB ↔ hybrid mode
         # switches so ALSA clients see one stable "NativMix:Input" port.
         self._virtual_client = None
@@ -121,12 +143,16 @@ class MidiThread(QThread):
         self._fader_feedback_enabled: bool = False
         self._feedback_lock = threading.Lock()
         self._feedback_takeover: dict[int, float] = {}  # channel_index -> last sent volume
-        self._last_sent_cc_value: dict[int, int] = {}  # cc -> 0-127
+        self._last_sent_cc_value: dict[tuple[int, int], int] = {}  # (midi_ch, cc) -> 0-127
         self._pending_sync: list[tuple[int, float]] | None = None
+        self._pending_mute_feedback: list[tuple[int, bool]] | None = None
+        # Ignore mute-toggle echoes shortly after we send mute/LED feedback.
+        self._mute_outbound_suppress_until: dict[tuple[int, int], float] = {}
         self.fader_sync_requested.connect(self._queue_fader_sync)
+        self.mute_feedback_requested.connect(self._queue_mute_feedback)
 
     def set_fader_feedback_enabled(self, enabled: bool) -> None:
-        """Enable or disable outbound MIDI CC fader position sync."""
+        """Enable or disable outbound MIDI CC fader / mute LED sync."""
         if self._fader_feedback_enabled != enabled:
             logger.debug("MIDI fader feedback %s", "enabled" if enabled else "disabled")
         self._fader_feedback_enabled = enabled
@@ -135,6 +161,8 @@ class MidiThread(QThread):
                 self._feedback_takeover.clear()
                 self._last_sent_cc_value.clear()
                 self._pending_sync = None
+                self._pending_mute_feedback = None
+                self._mute_outbound_suppress_until.clear()
 
     @pyqtSlot(list)
     def _queue_fader_sync(self, mappings: list[tuple[int, float]]) -> None:
@@ -144,9 +172,21 @@ class MidiThread(QThread):
         with self._feedback_lock:
             self._pending_sync = list(mappings)
 
+    @pyqtSlot(list)
+    def _queue_mute_feedback(self, states: list[tuple[int, bool]]) -> None:
+        """Queue outbound mute CC + optional Arduino LED hue."""
+        if not self._fader_feedback_enabled or not states:
+            return
+        with self._feedback_lock:
+            self._pending_mute_feedback = list(states)
+
     def request_fader_sync(self, mappings: list[tuple[int, float]]) -> None:
         """Request outbound CC sync; safe to call from the GUI/main thread."""
         self.fader_sync_requested.emit(mappings)
+
+    def request_mute_feedback(self, states: list[tuple[int, bool]]) -> None:
+        """Request mute/LED outbound sync; safe from the GUI/main thread."""
+        self.mute_feedback_requested.emit(states)
 
     def set_device(self, name: str) -> None:
         """Update the target MIDI device. Reconnects on the next loop cycle."""
@@ -162,23 +202,25 @@ class MidiThread(QThread):
             self._input_mode = mode
             self._panic_flag = True
 
-    def update_mappings(self, mappings: dict[int, int]) -> None:
+    def update_mappings(self, mappings: dict[tuple[int, int], int]) -> None:
         """
-        Update the CC -> Channel mappings.
+        Update volume CC mappings.
         Args:
-            mappings: dict where key is CC number, value is channel index.
+            mappings: (midi_channel, cc) -> NativMix channel index.
         """
-        self._cc_map = mappings
-        logger.debug("MIDI CC mappings updated: %s", self._cc_map)
+        with self._map_lock:
+            self._cc_map = dict(mappings)
+        logger.debug("MIDI CC mappings updated: %s", mappings)
 
-    def update_mute_mappings(self, mappings: dict[int, int]) -> None:
+    def update_mute_mappings(self, mappings: dict[tuple[int, int], int]) -> None:
         """
-        Update the mute-CC -> Channel mappings.
+        Update mute-CC mappings.
         Args:
-            mappings: dict where key is CC number, value is channel index.
+            mappings: (midi_channel, cc) -> NativMix channel index.
         """
-        self._mute_cc_map = mappings
-        logger.debug("MIDI Mute CC mappings updated: %s", self._mute_cc_map)
+        with self._map_lock:
+            self._mute_cc_map = dict(mappings)
+        logger.debug("MIDI Mute CC mappings updated: %s", mappings)
 
     def set_profile_ccs(
         self,
@@ -198,15 +240,19 @@ class MidiThread(QThread):
         self._profile_direct_map = dict(direct_map)
         logger.debug(
             "Profile CCs updated: next=%s prev=%s direct=%s",
-            next_cc, prev_cc, direct_map,
+            next_cc,
+            prev_cc,
+            direct_map,
         )
 
     def get_mapped_volumes(self) -> list[tuple[int, float]]:
         """Return a list of (channel_index, volume) for all current mappings."""
         results = []
-        for cc, ch_idx in self._cc_map.items():
-            if cc in self._last_values:
-                val = self._last_values[cc]
+        with self._map_lock:
+            items = list(self._cc_map.items())
+        for key, ch_idx in items:
+            if key in self._last_values:
+                val = self._last_values[key]
                 results.append((ch_idx, val / 127.0))
         return results
 
@@ -232,8 +278,8 @@ class MidiThread(QThread):
         if self._virtual_client is not None:
             try:
                 self._virtual_client.close_port()
-            except Exception:
-                pass
+            except (OSError, RuntimeError) as exc:
+                logger.debug("MidiThread: virtual port close: %s", exc)
             self._virtual_client = None
 
     def restart_midi(self) -> None:
@@ -281,9 +327,9 @@ class MidiThread(QThread):
         """Inner loop for MIDI processing logic."""
         backend_found = ensure_midi_backend()
 
-        if backend_found == 'rtmidi':
+        if backend_found == "rtmidi":
             logger.info("MIDI Backend loaded: rtmidi (supports virtual ports)")
-        elif backend_found == 'portmidi':
+        elif backend_found == "portmidi":
             logger.info("MIDI Backend loaded: portmidi via ctypes")
 
         if not backend_found:
@@ -295,7 +341,7 @@ class MidiThread(QThread):
                 self._sleep_checked(1.0)
             return
 
-        self._error_count = 0 # Reset on successful backend load
+        self._error_count = 0  # Reset on successful backend load
         self.status_changed.emit("stable", "MIDI Ready")
 
         _vport_warning_logged = False
@@ -354,6 +400,7 @@ class MidiThread(QThread):
                         _client = None
                         try:
                             import rtmidi  # Local import for safety
+
                             _client = rtmidi.MidiIn(rtmidi.API_LINUX_ALSA, name="NativMix")
                             _client.open_virtual_port("Input")
                             self._virtual_client = _client
@@ -395,7 +442,8 @@ class MidiThread(QThread):
                         if msg_data:
                             msg, _ = msg_data
                             if len(msg) >= 3 and (msg[0] & 0xF0) == 0xB0:
-                                self._handle_cc(msg[1], msg[2])
+                                midi_ch = int(msg[0] & 0x0F)
+                                self._handle_cc(midi_ch, msg[1], msg[2])
 
                         time.sleep(0.01)
 
@@ -411,10 +459,7 @@ class MidiThread(QThread):
                             break
 
                     if not target_name:
-                        logger.warning(
-                            "MidiThread: Device '%s' not found. Available: %s",
-                            target_device, names
-                        )
+                        logger.warning("MidiThread: Device '%s' not found. Available: %s", target_device, names)
                         self.connection_changed.emit(False)
                         self.status_changed.emit("error_temporary", f"Device '{target_device}' not found")
                         self._sleep_checked(5.0)
@@ -434,9 +479,7 @@ class MidiThread(QThread):
 
                     if out_name:
                         with mido.open_input(target_name) as inport, mido.open_output(out_name) as outport:
-                            logger.info(
-                                "MidiThread: Connected to %s (out: %s)", target_name, out_name
-                            )
+                            logger.info("MidiThread: Connected to %s (out: %s)", target_name, out_name)
                             self.status_changed.emit("stable", f"Connected: {target_device}")
                             self.connection_changed.emit(True)
                             self._device_loop(inport, outport, target_device)
@@ -461,12 +504,13 @@ class MidiThread(QThread):
             if self._input_mode == "usb" or self._device_name != target_device:
                 break
             self._process_pending_sync(outport)
+            self._process_pending_mute_feedback(outport)
             msg = inport.receive(block=False)
             if msg is None:
                 time.sleep(0.05)
                 continue
             if msg.type == "control_change":
-                self._handle_cc(msg.control, msg.value)
+                self._handle_cc(int(msg.channel), msg.control, msg.value)
 
     def _process_pending_sync(self, outport) -> None:
         """Send queued outbound fader CC values when feedback is enabled."""
@@ -475,44 +519,121 @@ class MidiThread(QThread):
         with self._feedback_lock:
             pending = self._pending_sync
             self._pending_sync = None
-        if not pending:
-            return
-        if outport is None:
+        if not pending or outport is None:
             return
 
-        ch_to_cc = {ch_idx: cc for cc, ch_idx in self._cc_map.items()}
+        ch_to_bindings: dict[int, list[tuple[int, int]]] = {}
+        with self._map_lock:
+            items = list(self._cc_map.items())
+        for key, ch_idx in items:
+            ch_to_bindings.setdefault(ch_idx, []).append(key)
         for ch_idx, volume in pending:
-            cc = ch_to_cc.get(ch_idx)
-            if cc is None:
-                continue
-            self._send_fader_cc(outport, cc, ch_idx, volume)
+            for midi_ch, cc in ch_to_bindings.get(ch_idx, []):
+                self._send_fader_cc(outport, midi_ch, cc, ch_idx, volume)
 
-    def _send_fader_cc(self, outport, cc: int, ch_idx: int, volume: float) -> None:
+    def _process_pending_mute_feedback(self, outport) -> None:
+        """Send mute CC state and optional Arduino LED hue."""
+        if not self._fader_feedback_enabled:
+            return
+        with self._feedback_lock:
+            pending = self._pending_mute_feedback
+            self._pending_mute_feedback = None
+        if not pending or outport is None:
+            return
+
+        with self._map_lock:
+            ch_to_mute: dict[int, tuple[int, int]] = {ch_idx: key for key, ch_idx in self._mute_cc_map.items()}
+        now = time.monotonic()
+        for ch_idx, muted in pending:
+            binding = ch_to_mute.get(ch_idx)
+            if binding is None:
+                continue
+            midi_ch, cc = binding
+            value = 127 if muted else 0
+            self._send_raw_cc(outport, midi_ch, cc, value)
+            with self._feedback_lock:
+                self._mute_outbound_suppress_until[binding] = now + _MUTE_OUTBOUND_SUPPRESS_S
+            led_cc = _example_led_cc_for_mute(cc)
+            if led_cc is not None:
+                hue = _LED_HUE_MUTED if muted else _LED_HUE_UNMUTED
+                self._send_raw_cc(outport, midi_ch, led_cc, hue)
+
+    def _send_raw_cc(self, outport, midi_ch: int, cc: int, value: int) -> None:
+        """Send one CC without volume takeover arming."""
+        cc_value = max(0, min(127, int(value)))
+        key = (midi_ch, cc)
+        with self._feedback_lock:
+            if self._last_sent_cc_value.get(key) == cc_value:
+                return
+            self._last_sent_cc_value[key] = cc_value
+            self._last_values[key] = cc_value
+        try:
+            outport.send(
+                mido.Message(
+                    "control_change",
+                    channel=max(0, min(15, midi_ch)),
+                    control=cc,
+                    value=cc_value,
+                )
+            )
+            logger.debug(
+                "MIDI outbound CC: midi_ch=%d cc=%d value=%d",
+                midi_ch,
+                cc,
+                cc_value,
+            )
+        except (OSError, RuntimeError) as exc:
+            logger.warning("MIDI outbound CC send failed (cc=%d): %s", cc, exc)
+
+    def _send_fader_cc(
+        self,
+        outport,
+        midi_ch: int,
+        cc: int,
+        ch_idx: int,
+        volume: float,
+    ) -> None:
         """Send one outbound volume CC and arm takeover suppression for that channel."""
         cc_value = max(0, min(127, int(round(max(0.0, min(1.0, volume)) * 127))))
+        key = (midi_ch, cc)
         with self._feedback_lock:
-            if self._last_sent_cc_value.get(cc) == cc_value:
+            if self._last_sent_cc_value.get(key) == cc_value:
                 return
-            self._last_sent_cc_value[cc] = cc_value
-            self._last_values[cc] = cc_value
+            self._last_sent_cc_value[key] = cc_value
+            self._last_values[key] = cc_value
             self._feedback_takeover[ch_idx] = cc_value / 127.0
         try:
-            outport.send(mido.Message("control_change", channel=0, control=cc, value=cc_value))
-            logger.debug("MIDI fader feedback: ch=%d cc=%d value=%d", ch_idx, cc, cc_value)
+            outport.send(
+                mido.Message(
+                    "control_change",
+                    channel=max(0, min(15, midi_ch)),
+                    control=cc,
+                    value=cc_value,
+                )
+            )
+            logger.debug(
+                "MIDI fader feedback: nmix_ch=%d midi_ch=%d cc=%d value=%d",
+                ch_idx,
+                midi_ch,
+                cc,
+                cc_value,
+            )
         except (OSError, RuntimeError) as exc:
             logger.warning("MIDI fader feedback send failed (cc=%d): %s", cc, exc)
 
-    def _handle_cc(self, cc: int, val: int) -> None:
-        """Process a single MIDI Control Change message."""
-        self._last_values[cc] = val
+    def _handle_cc(self, midi_ch: int, cc: int, val: int) -> None:
+        """Process a single MIDI Control Change message on *midi_ch* (0-15)."""
+        midi_ch = max(0, min(15, int(midi_ch)))
+        key = (midi_ch, cc)
+        self._last_values[key] = val
 
         # 1. Always emit for Learn handshake
-        self.midi_cc_received.emit(cc, val)
+        self.midi_cc_received.emit(midi_ch, cc, val)
 
-        # 2. Check if mapped to a fader — throttled to 50 Hz per CC (20 ms)
-        # to prevent Qt signal queue flooding from misbehaving MIDI controllers.
-        if cc in self._cc_map:
-            ch_idx = self._cc_map[cc]
+        # 2. Check if mapped to a fader — throttled to 50 Hz per binding (20 ms)
+        with self._map_lock:
+            ch_idx = self._cc_map.get(key)
+        if ch_idx is not None:
             with self._feedback_lock:
                 takeover_vol = self._feedback_takeover.get(ch_idx)
             if _inbound_fader_suppressed(takeover_vol, val):
@@ -521,16 +642,20 @@ class MidiThread(QThread):
                 with self._feedback_lock:
                     self._feedback_takeover.pop(ch_idx, None)
             now = time.monotonic()
-            if now - self._last_vol_emit.get(cc, 0.0) >= 0.02:
-                self._last_vol_emit[cc] = now
+            if now - self._last_vol_emit.get(key, 0.0) >= 0.02:
+                self._last_vol_emit[key] = now
                 vol = val / 127.0
                 self.midi_volumes_changed.emit([(ch_idx, vol)])
 
-        # 3. Check if mapped to a mute toggle.
-        # Only react to val == 127 (standard button-on) so faders/potis cannot
-        # cause rapid toggle-flicker when sweeping through intermediate values.
-        if cc in self._mute_cc_map and val == 127:
-            self.midi_mute_toggled.emit(self._mute_cc_map[cc])
+        # 3. Mute toggle (value == 127 only). Suppress echoes of our own outbound.
+        if val == 127:
+            with self._map_lock:
+                mute_ch = self._mute_cc_map.get(key)
+            if mute_ch is not None:
+                with self._feedback_lock:
+                    until = self._mute_outbound_suppress_until.get(key, 0.0)
+                if time.monotonic() >= until:
+                    self.midi_mute_toggled.emit(mute_ch)
 
         # 4. Profile switching (only on button press, value == 127)
         if val == 127:
