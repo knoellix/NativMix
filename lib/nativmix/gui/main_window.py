@@ -139,18 +139,34 @@ _CHANNEL_MAX_WIDTH = 85
 # ---------------------------------------------------------------------------
 
 
+_GRIP_HOVER_CURSOR = Qt.CursorShape.SizeHorCursor
+_GRIP_GRAB_CURSOR = Qt.CursorShape.ClosedHandCursor
+
+
+def _push_grab_cursor() -> None:
+    QApplication.setOverrideCursor(QCursor(_GRIP_GRAB_CURSOR))
+
+
+def _pop_grab_cursor() -> None:
+    if QApplication.overrideCursor() is not None:
+        QApplication.restoreOverrideCursor()
+
+
 class _EditableChannelLabel(QLabel):
     """Channel name: double-click renames; drag reorders the strip."""
 
     rename_requested = pyqtSignal(str)
     reorder_finished = pyqtSignal(object)  # global QPoint on release after drag threshold
     reorder_active_changed = pyqtSignal(bool)
+    reorder_tracking = pyqtSignal(object)  # global QPoint while dragging
 
     def __init__(self, text: str = "", parent=None) -> None:
         super().__init__(text, parent)
         self._press_global: QPoint | None = None
         self._dragging = False
         self._reorder_enabled = False
+        self._grab_cursor_pushed = False
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
 
     def set_reorder_enabled(self, enabled: bool) -> None:
         self._reorder_enabled = enabled
@@ -158,16 +174,23 @@ class _EditableChannelLabel(QLabel):
         if not enabled:
             self._press_global = None
             self._dragging = False
+            self._release_grab_cursor()
             self.reorder_active_changed.emit(False)
             self.unsetCursor()
         else:
-            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
+
+    def _release_grab_cursor(self) -> None:
+        if self._grab_cursor_pushed:
+            _pop_grab_cursor()
+            self._grab_cursor_pushed = False
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._reorder_enabled:
             self._press_global = event.globalPosition().toPoint()
             self._dragging = False
-            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            _push_grab_cursor()
+            self._grab_cursor_pushed = True
             self.grabMouse()
             event.accept()
             return
@@ -175,11 +198,14 @@ class _EditableChannelLabel(QLabel):
 
     def mouseMoveEvent(self, event) -> None:
         if self._press_global is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            pos = event.globalPosition().toPoint()
             if not self._dragging:
-                delta = event.globalPosition().toPoint() - self._press_global
+                delta = pos - self._press_global
                 if delta.manhattanLength() >= QApplication.startDragDistance():
                     self._dragging = True
                     self.reorder_active_changed.emit(True)
+            if self._dragging:
+                self.reorder_tracking.emit(pos)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -192,10 +218,11 @@ class _EditableChannelLabel(QLabel):
             self.reorder_finished.emit(event.globalPosition().toPoint())
         self._press_global = None
         self._dragging = False
+        self._release_grab_cursor()
         if was_dragging:
             self.reorder_active_changed.emit(False)
         if self._reorder_enabled:
-            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
         else:
             self.unsetCursor()
         if event.button() == Qt.MouseButton.LeftButton and was_dragging:
@@ -209,10 +236,11 @@ class _EditableChannelLabel(QLabel):
         was_dragging = self._dragging
         self._press_global = None
         self._dragging = False
+        self._release_grab_cursor()
         if was_dragging:
             self.reorder_active_changed.emit(False)
         if self._reorder_enabled:
-            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
         text, ok = QInputDialog.getText(self, "Rename Channel", "Name:", text=self.text())
         if ok and text.strip():
             self.rename_requested.emit(text.strip())
@@ -224,12 +252,15 @@ class _StripDragSeparator(QFrame):
 
     reorder_finished = pyqtSignal(object)  # global QPoint
     reorder_active_changed = pyqtSignal(bool)
+    reorder_tracking = pyqtSignal(object)  # global QPoint while dragging
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._press_global: QPoint | None = None
         self._dragging = False
         self._reorder_enabled = False
+        self._grab_cursor_pushed = False
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
         # HLine alone is ~1px; give a usable hit target without changing look much.
         self.setMinimumHeight(8)
 
@@ -239,16 +270,23 @@ class _StripDragSeparator(QFrame):
         if not enabled:
             self._press_global = None
             self._dragging = False
+            self._release_grab_cursor()
             self.reorder_active_changed.emit(False)
             self.unsetCursor()
         else:
-            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
+
+    def _release_grab_cursor(self) -> None:
+        if self._grab_cursor_pushed:
+            _pop_grab_cursor()
+            self._grab_cursor_pushed = False
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._reorder_enabled:
             self._press_global = event.globalPosition().toPoint()
             self._dragging = False
-            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+            _push_grab_cursor()
+            self._grab_cursor_pushed = True
             self.grabMouse()
             event.accept()
             return
@@ -256,11 +294,14 @@ class _StripDragSeparator(QFrame):
 
     def mouseMoveEvent(self, event) -> None:
         if self._press_global is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            pos = event.globalPosition().toPoint()
             if not self._dragging:
-                delta = event.globalPosition().toPoint() - self._press_global
+                delta = pos - self._press_global
                 if delta.manhattanLength() >= QApplication.startDragDistance():
                     self._dragging = True
                     self.reorder_active_changed.emit(True)
+            if self._dragging:
+                self.reorder_tracking.emit(pos)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -273,10 +314,11 @@ class _StripDragSeparator(QFrame):
             self.reorder_finished.emit(event.globalPosition().toPoint())
         self._press_global = None
         self._dragging = False
+        self._release_grab_cursor()
         if was_dragging:
             self.reorder_active_changed.emit(False)
         if self._reorder_enabled:
-            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
         else:
             self.unsetCursor()
         if event.button() == Qt.MouseButton.LeftButton and was_dragging:
@@ -376,6 +418,8 @@ class ChannelWidget(QFrame):
     """
 
     strip_drop = pyqtSignal(int, int, bool)  # source_id, target_id, insert_before
+    reorder_tracking = pyqtSignal(object)  # global QPoint while dragging
+    reorder_active_changed = pyqtSignal(bool)
 
     def __init__(
         self,
@@ -400,6 +444,11 @@ class ChannelWidget(QFrame):
         # Prevent the whole column from stretching infinitely if long text is loaded
         self.setMaximumWidth(_CHANNEL_MAX_WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+
+        self._drop_hint = QFrame(self)
+        self._drop_hint.setFixedWidth(3)
+        self._drop_hint.hide()
+        self._drop_hint_side: str | None = None
 
         # ── Mute Button ────────────────────────────────────────────────
         self._mute_btn = QToolButton()
@@ -451,6 +500,10 @@ class ChannelWidget(QFrame):
         self._sep.reorder_finished.connect(self._on_reorder_gesture_finished)
         self._ch_label.reorder_active_changed.connect(self._on_reorder_active_changed)
         self._sep.reorder_active_changed.connect(self._on_reorder_active_changed)
+        self._ch_label.reorder_tracking.connect(self.reorder_tracking.emit)
+        self._sep.reorder_tracking.connect(self.reorder_tracking.emit)
+        self._ch_label.reorder_active_changed.connect(self.reorder_active_changed.emit)
+        self._sep.reorder_active_changed.connect(self.reorder_active_changed.emit)
         self._update_drag_handle_cursor()
 
         # ── Mode Switch ────────────────────────────────────────────────
@@ -754,23 +807,40 @@ class ChannelWidget(QFrame):
             self.setGraphicsEffect(fx)
         else:
             self.setGraphicsEffect(None)
+            self.set_drop_hint(None)
+
+    def set_drop_hint(self, side: str | None) -> None:
+        """Show a highlight edge where the strip would insert ('before'/'after'/None)."""
+        self._drop_hint_side = side
+        if side is None:
+            self._drop_hint.hide()
+            return
+        accent = self.palette().color(QPalette.ColorRole.Highlight)
+        self._drop_hint.setAutoFillBackground(True)
+        pal = self._drop_hint.palette()
+        pal.setColor(QPalette.ColorRole.Window, accent)
+        self._drop_hint.setPalette(pal)
+        self._drop_hint.setGeometry(
+            0 if side == "before" else max(0, self.width() - 3),
+            0,
+            3,
+            self.height(),
+        )
+        self._drop_hint.show()
+        self._drop_hint.raise_()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self._drop_hint_side is not None:
+            self.set_drop_hint(self._drop_hint_side)
 
     def _on_reorder_gesture_finished(self, global_pos: QPoint) -> None:
         """Drop the strip under the pointer after a drag from the label/separator."""
         if self._compact:
             return
-        hit = QApplication.widgetAt(global_pos)
-        target: ChannelWidget | None = None
-        w = hit
-        while w is not None:
-            if isinstance(w, ChannelWidget):
-                target = w
-                break
-            w = w.parentWidget()
-        if target is None or target is self:
+        target, before = _channel_drop_target_at(global_pos, exclude=self)
+        if target is None:
             return
-        local = target.mapFromGlobal(global_pos)
-        before = local.x() < (target.width() / 2)
         self.strip_drop.emit(self._ch, target.channel_index, before)
 
     @property
@@ -1231,6 +1301,26 @@ class ChannelWidget(QFrame):
 # ---------------------------------------------------------------------------
 
 
+def _channel_drop_target_at(
+    global_pos: QPoint,
+    exclude: ChannelWidget | None = None,
+) -> tuple[ChannelWidget | None, bool]:
+    """Return (target strip, insert_before) under *global_pos*, or (None, False)."""
+    hit = QApplication.widgetAt(global_pos)
+    target: ChannelWidget | None = None
+    w = hit
+    while w is not None:
+        if isinstance(w, ChannelWidget):
+            target = w
+            break
+        w = w.parentWidget()
+    if target is None or target is exclude:
+        return None, False
+    local = target.mapFromGlobal(global_pos)
+    before = local.x() < (target.width() / 2)
+    return target, before
+
+
 class MainWindow(QMainWindow):
     """
     NativMix main mixer window.
@@ -1494,6 +1584,8 @@ class MainWindow(QMainWindow):
                     continue
                 w = ChannelWidget(i, self._config, self._backend, is_midi=is_midi)
                 w.strip_drop.connect(self._on_strip_drop)
+                w.reorder_tracking.connect(self._on_reorder_tracking)
+                w.reorder_active_changed.connect(self._on_reorder_active_changed)
                 self._channels.append(w)
                 # Ensure MIDI-relevant signals are connected even after rebuild
                 if w.is_midi_channel and self._midi:
@@ -1521,7 +1613,24 @@ class MainWindow(QMainWindow):
                 return widget
         return None
 
+    def _clear_drop_hints(self) -> None:
+        for widget in self._channels:
+            widget.set_drop_hint(None)
+
+    def _on_reorder_active_changed(self, active: bool) -> None:
+        if not active:
+            self._clear_drop_hints()
+
+    def _on_reorder_tracking(self, global_pos: QPoint) -> None:
+        """Highlight the insert edge under the cursor while dragging a strip."""
+        self._clear_drop_hints()
+        target, before = _channel_drop_target_at(global_pos)
+        if target is None:
+            return
+        target.set_drop_hint("before" if before else "after")
+
     def _on_strip_drop(self, source_id: int, target_id: int, before: bool) -> None:
+        self._clear_drop_hints()
         order = self._config.get_channel_order()
         if source_id not in order or target_id not in order or source_id == target_id:
             return
