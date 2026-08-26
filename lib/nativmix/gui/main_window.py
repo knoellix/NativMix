@@ -24,8 +24,8 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, QSettings, QSize, Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QColor, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
+from PyQt6.QtCore import QEvent, QMimeData, QPoint, QSettings, QSize, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QColor, QCursor, QDrag, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -61,6 +61,8 @@ if TYPE_CHECKING:
     from nativmix.utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
+
+_CHANNEL_MIME = "application/x-nativmix-channel-id"
 
 
 def _format_midi_binding_label(prefix: str, midi_ch: int, cc: int | None, empty: str) -> str:
@@ -240,6 +242,8 @@ class ChannelWidget(QFrame):
       + App / + Gerät button → Toggles (Invert/VSink)
     """
 
+    strip_drop = pyqtSignal(int, int, bool)  # source_id, target_id, insert_before
+
     def __init__(
         self,
         channel_index: int,
@@ -253,6 +257,8 @@ class ChannelWidget(QFrame):
         self._config = config
         self._backend = backend
         self.is_midi_channel = is_midi
+        self._compact = False
+        self._drag_start_pos: QPoint | None = None
         logger.debug("Creating ChannelWidget: index=%d, is_midi=%s", channel_index, is_midi)
 
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -262,6 +268,7 @@ class ChannelWidget(QFrame):
         # Prevent the whole column from stretching infinitely if long text is loaded
         self.setMaximumWidth(_CHANNEL_MAX_WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.setAcceptDrops(True)
 
         # ── Mute Button ────────────────────────────────────────────────
         self._mute_btn = QToolButton()
@@ -297,7 +304,7 @@ class ChannelWidget(QFrame):
         self._ch_label = _EditableChannelLabel(label_text)
         self._ch_label.setObjectName("ch_label")
         self._ch_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self._ch_label.setToolTip("Double-click to rename")
+        self._ch_label.setToolTip("Double-click to rename · drag to reorder")
         self._ch_label.rename_requested.connect(self._on_rename)
         tiny = self._ch_label.font()
         tiny.setPointSize(8)
@@ -308,6 +315,10 @@ class ChannelWidget(QFrame):
         self._sep = QFrame()
         self._sep.setFrameShape(QFrame.Shape.HLine)
         self._sep.setFrameShadow(QFrame.Shadow.Sunken)
+        self._sep.setToolTip("Drag to reorder channel strips")
+        self._ch_label.installEventFilter(self)
+        self._sep.installEventFilter(self)
+        self._update_drag_handle_cursor()
 
         # ── Mode Switch ────────────────────────────────────────────────
         self._mode_cb = QCheckBox("Device")
@@ -555,6 +566,9 @@ class ChannelWidget(QFrame):
 
     def set_compact_mode(self, compact: bool) -> None:
         """Hide app list and controls below the separator; separator stays visible."""
+        self._compact = compact
+        self.setAcceptDrops(not compact)
+        self._update_drag_handle_cursor()
         # Freeze width so fader spacing doesn't change when app list is hidden
         if compact:
             self.setFixedWidth(self.width())
@@ -594,6 +608,62 @@ class ChannelWidget(QFrame):
             self._learn_btn.setVisible(False)
             self._mute_learn_btn.setVisible(False)
             self._remove_midi_btn.setVisible(False)
+
+    def _update_drag_handle_cursor(self) -> None:
+        cursor = QCursor(Qt.CursorShape.SizeHorCursor) if not self._compact else QCursor()
+        self._ch_label.setCursor(cursor)
+        self._sep.setCursor(cursor)
+
+    def eventFilter(self, obj, event):  # noqa: N802
+        if obj in (self._ch_label, self._sep) and not self._compact:
+            et = event.type()
+            if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                self._drag_start_pos = event.position().toPoint()
+            elif et == QEvent.Type.MouseMove and self._drag_start_pos is not None:
+                if event.buttons() & Qt.MouseButton.LeftButton:
+                    delta = event.position().toPoint() - self._drag_start_pos
+                    if delta.manhattanLength() >= QApplication.startDragDistance():
+                        self._drag_start_pos = None
+                        self._start_strip_drag()
+                        return True
+            elif et == QEvent.Type.MouseButtonRelease:
+                self._drag_start_pos = None
+        return super().eventFilter(obj, event)
+
+    def _start_strip_drag(self) -> None:
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(_CHANNEL_MIME, str(self._ch).encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.MoveAction)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if self._compact or not event.mimeData().hasFormat(_CHANNEL_MIME):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if self._compact or not event.mimeData().hasFormat(_CHANNEL_MIME):
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        if self._compact or not event.mimeData().hasFormat(_CHANNEL_MIME):
+            event.ignore()
+            return
+        try:
+            source_id = int(bytes(event.mimeData().data(_CHANNEL_MIME)).decode("utf-8"))
+        except (TypeError, ValueError):
+            event.ignore()
+            return
+        if source_id == self._ch:
+            event.ignore()
+            return
+        before = event.position().x() < (self.width() / 2)
+        self.strip_drop.emit(source_id, self._ch, before)
+        event.acceptProposedAction()
 
     @property
     def channel_index(self) -> int:
@@ -1304,14 +1374,18 @@ class MainWindow(QMainWindow):
                     widget.deleteLater()
             self._channels.clear()
 
-            for ch_dict in self._config.all_channels():
-                i = ch_dict["index"]
+            by_id = {int(ch_dict["index"]): ch_dict for ch_dict in self._config.all_channels()}
+            for i in self._config.get_channel_order():
+                ch_dict = by_id.get(i)
+                if ch_dict is None:
+                    continue
                 is_midi = ch_dict.get("is_midi", False)
                 # In USB mode MIDI widgets are purged by refresh_layout anyway;
                 # skip creating them to avoid the wasted create-then-destroy cycle.
                 if is_midi and self._config.input_mode == "usb":
                     continue
                 w = ChannelWidget(i, self._config, self._backend, is_midi=is_midi)
+                w.strip_drop.connect(self._on_strip_drop)
                 self._channels.append(w)
                 # Ensure MIDI-relevant signals are connected even after rebuild
                 if w.is_midi_channel and self._midi:
@@ -1331,6 +1405,27 @@ class MainWindow(QMainWindow):
         finally:
             self._ch_layout.setEnabled(True)
             self._ch_layout.update()
+
+    def _channel_widget(self, channel_index: int) -> ChannelWidget | None:
+        """Return the strip widget for a stable channel id (not display slot)."""
+        for widget in self._channels:
+            if widget.channel_index == channel_index:
+                return widget
+        return None
+
+    def _on_strip_drop(self, source_id: int, target_id: int, before: bool) -> None:
+        order = self._config.get_channel_order()
+        if source_id not in order or target_id not in order or source_id == target_id:
+            return
+        order = [cid for cid in order if cid != source_id]
+        insert_at = order.index(target_id)
+        if not before:
+            insert_at += 1
+        order.insert(insert_at, source_id)
+        self._config.set_channel_order(order)
+        if self._profile_manager is not None:
+            self._profile_manager.save_current(self._config.all_channels(), self._config.get_channel_order())
+        self._rebuild_channels()
 
     def finalize_ui(self) -> None:
         """Called once hardware/audio audit is complete to enable rendering."""
@@ -1358,23 +1453,26 @@ class MainWindow(QMainWindow):
             # Update persistent in-memory state
             self._config.set_channel_volume(i, vol)
 
-            if i < len(self._channels):
-                self._channels[i].set_volume(vol)
+            widget = self._channel_widget(i)
+            if widget is not None:
+                widget.set_volume(vol)
 
     def sync_sliders_from_config(self) -> None:
         """Refresh on-screen fader positions from persisted profile/config volumes."""
         for i in range(self._config.num_channels):
-            if i >= len(self._channels):
-                break
-            self._channels[i].set_volume(self._config.get_channel_volume(i))
+            widget = self._channel_widget(i)
+            if widget is None:
+                continue
+            widget.set_volume(self._config.get_channel_volume(i))
         logger.debug("Slider positions synced from config/profile")
         self.fader_display_synced.emit()
 
     @pyqtSlot(int, float)
     @_slot_guard
     def on_channel_volume_changed(self, channel_index: int, volume: float) -> None:
-        if 0 <= channel_index < len(self._channels):
-            self._channels[channel_index].set_volume(volume)
+        widget = self._channel_widget(channel_index)
+        if widget is not None:
+            widget.set_volume(volume)
 
     @pyqtSlot(bool)
     @_slot_guard
@@ -1443,8 +1541,9 @@ class MainWindow(QMainWindow):
     @pyqtSlot(int, bool)
     @_slot_guard
     def on_mute_state_changed(self, channel_index: int, is_muted: bool) -> None:
-        if 0 <= channel_index < len(self._channels):
-            self._channels[channel_index].set_mute_state(is_muted)
+        widget = self._channel_widget(channel_index)
+        if widget is not None:
+            widget.set_mute_state(is_muted)
 
     def open_settings(self) -> None:
         """Open the settings panel (called from tray icon)."""

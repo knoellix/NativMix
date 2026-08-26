@@ -739,6 +739,8 @@ def main() -> None:
             config.active_profile_id = profile_manager.active_profile_id
             config.apply_profile(profile)
             config.save()
+            # Rebuild strips so channel_order and assignments match the new profile.
+            window._rebuild_channels()
             # Always clear any stale takeover from the previous profile first.
             # Without this, switching away from a restore-enabled profile leaves
             # old takeover keys in place, blocking all subsequent Arduino input.
