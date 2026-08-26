@@ -145,11 +145,28 @@ class _EditableChannelLabel(QLabel):
 
     rename_requested = pyqtSignal(str)
 
+    def mousePressEvent(self, event) -> None:
+        # Accept left-press so the event does not bubble to MainWindow.startSystemMove.
+        if event.button() == Qt.MouseButton.LeftButton and bool(self.property("nativmix_strip_drag")):
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
     def mouseDoubleClickEvent(self, event) -> None:
         text, ok = QInputDialog.getText(self, "Rename Channel", "Name:", text=self.text())
         if ok and text.strip():
             self.rename_requested.emit(text.strip())
         super().mouseDoubleClickEvent(event)
+
+
+class _StripDragSeparator(QFrame):
+    """Horizontal rule that also acts as a strip reorder grip."""
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton and bool(self.property("nativmix_strip_drag")):
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -312,12 +329,14 @@ class ChannelWidget(QFrame):
 
         # Accent palette applied later during update_accent_colors
 
-        self._sep = QFrame()
+        self._sep = _StripDragSeparator()
         self._sep.setFrameShape(QFrame.Shape.HLine)
         self._sep.setFrameShadow(QFrame.Shadow.Sunken)
         self._sep.setToolTip("Drag to reorder channel strips")
         self._ch_label.installEventFilter(self)
         self._sep.installEventFilter(self)
+        self._ch_label.setProperty("nativmix_strip_drag", True)
+        self._sep.setProperty("nativmix_strip_drag", True)
         self._update_drag_handle_cursor()
 
         # ── Mode Switch ────────────────────────────────────────────────
@@ -2003,10 +2022,26 @@ class MainWindow(QMainWindow):
 
     def mousePressEvent(self, event) -> None:
         """Native Wayland Window Move. No manual coordinate math needed."""
-        if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton and not self._hit_strip_drag_handle(event):
             if self.windowHandle():
                 self.windowHandle().startSystemMove()
         super().mousePressEvent(event)
+
+    def _hit_strip_drag_handle(self, event) -> bool:
+        """True when the press landed on a channel strip reorder handle."""
+        hit = self.childAt(event.position().toPoint())
+        w = hit
+        while w is not None and w is not self:
+            if bool(w.property("nativmix_strip_drag")):
+                # Compact mode: handles are inactive (property still set).
+                parent = w.parentWidget()
+                while parent is not None and parent is not self:
+                    if isinstance(parent, ChannelWidget) and parent._compact:
+                        return False
+                    parent = parent.parentWidget()
+                return True
+            w = w.parentWidget()
+        return False
 
     def changeEvent(self, event: QEvent) -> None:
         if event.type() == QEvent.Type.ActivationChange:
