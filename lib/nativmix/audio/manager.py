@@ -461,20 +461,21 @@ class _AudioListenerThread(QThread):
                                 v_sink_name,
                             )
 
-                        # Robust pulsectl call: fetch fresh info object and VALIDATE type
-                        try:
-                            si_fresh = pulse.sink_input_info(info.index)
-                            if si_fresh and not isinstance(si_fresh, int):
-                                pulse.volume_set_all_chans(si_fresh, 1.0)  # Unity gain inside V-Sink
-                            else:
-                                # If si_fresh is 200 (int) or None, we cannot resolve metadata right now
-                                logger.info(
-                                    "Received status ID (%s) instead of metadata object for %s, skipping volume sync",
-                                    si_fresh,
-                                    info.app_name,
-                                )
-                        except (pulsectl.PulseError, TypeError, ValueError) as e:
-                            logger.debug("Minor: Could not update volume after move (stream may have closed): %s", e)
+                # Keep stream at unity and channel level on the V-Sink only when the
+                # stream is actually on that sink (avoids blasting 100% on the old sink).
+                try:
+                    si_fresh = pulse.sink_input_info(info.index)
+                    if si_fresh and not isinstance(si_fresh, int) and si_fresh.sink == v_sink.index:
+                        pulse.volume_set_all_chans(si_fresh, 1.0)
+                        pulse.volume_set_all_chans(v_sink, vol)
+                    elif si_fresh is None or isinstance(si_fresh, int):
+                        logger.info(
+                            "Received status ID (%s) instead of metadata object for %s, skipping volume sync",
+                            si_fresh,
+                            info.app_name,
+                        )
+                except (pulsectl.PulseError, TypeError, ValueError) as e:
+                    logger.debug("Minor: Could not sync V-Sink volumes for %s: %s", info.app_name, e)
             else:
                 try:
                     si_fresh = pulse.sink_input_info(info.index)
@@ -1315,10 +1316,17 @@ class PipeWireManager(AudioBackendBase):
             except pulsectl.PulseError as exc:
                 logger.error("Failed to route added apps into V-Sink %s: %s", sink_name, exc)
 
-        # Apply volumes for still-mapped apps (apps that were neither added nor removed)
-        for name in app_names:
-            self._apply_volume_by_name(name, current_volume)
-            self._apply_mute_by_name(name, current_muted)
+        # Volume ownership: with V-Sink, gain lives on the null-sink and streams
+        # stay at unity. Applying stream volume here as well double-attenuates
+        # (stream × sink) and makes routed apps sound quieter than direct routing.
+        if v_sink_enabled:
+            self._set_v_sink_volume(channel_index, current_volume)
+            for name in app_names:
+                self._apply_mute_by_name(name, current_muted)
+        else:
+            for name in app_names:
+                self._apply_volume_by_name(name, current_volume)
+                self._apply_mute_by_name(name, current_muted)
 
         # Do NOT call _sync_v_sink_routing() here: it would re-process every
         # stream and may double-move or un-cork streams that are mid-transition.
@@ -2169,18 +2177,21 @@ class PipeWireManager(AudioBackendBase):
         self._restore_hardware_default_sink()
 
     def _unmute_module_streams(self, module_id: str | int, pulse: pulsectl.Pulse | None = None) -> None:
-        """Explicitly unmute all sink-inputs belonging to a specific module."""
+        """Unmute loopback sink-inputs and keep them at unity gain."""
         try:
             mod_idx = int(module_id)
-            if pulse:
-                for si in pulse.sink_input_list():
+
+            def _fix(p: pulsectl.Pulse) -> None:
+                for si in p.sink_input_list():
                     if si.owner_module == mod_idx:
-                        pulse.sink_input_mute(si.index, mute=False)
+                        p.sink_input_mute(si.index, mute=False)
+                        p.volume_set_all_chans(si, 1.0)
+
+            if pulse:
+                _fix(pulse)
             else:
                 with pulsectl.Pulse("nativmix-unmute-mod") as p:
-                    for si in p.sink_input_list():
-                        if si.owner_module == mod_idx:
-                            p.sink_input_mute(si.index, mute=False)
+                    _fix(p)
         except (ValueError, pulsectl.PulseError):
             pass
 

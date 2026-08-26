@@ -2,6 +2,10 @@
 
 All notable changes to NativMix are documented in this file.
 
+## Unreleased
+
+- Fix: V-Sink routing no longer double-applies fader volume on the stream and the null-sink (apps sounded quieter when routed through a V-Sink)
+
 ## v1.0.18
 
 - Feat: Windows/Flatpak — optional GitHub update hint on startup (release link + changelog; per-version “don’t remind”; master toggle in Settings)
