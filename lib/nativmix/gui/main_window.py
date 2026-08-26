@@ -24,8 +24,8 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, QMimeData, QPoint, QSettings, QSize, Qt, QTimer, pyqtSignal, pyqtSlot
-from PyQt6.QtGui import QColor, QCursor, QDrag, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
+from PyQt6.QtCore import QEvent, QPoint, QSettings, QSize, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -61,8 +61,6 @@ if TYPE_CHECKING:
     from nativmix.utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
-
-_CHANNEL_MIME = "application/x-nativmix-channel-id"
 
 
 def _format_midi_binding_label(prefix: str, midi_ch: int, cc: int | None, empty: str) -> str:
@@ -141,18 +139,59 @@ _CHANNEL_MAX_WIDTH = 85
 
 
 class _EditableChannelLabel(QLabel):
-    """QLabel that opens a rename dialog on double-click."""
+    """Channel name: double-click renames; drag reorders the strip."""
 
     rename_requested = pyqtSignal(str)
+    reorder_finished = pyqtSignal(object)  # global QPoint on release after drag threshold
+
+    def __init__(self, text: str = "", parent=None) -> None:
+        super().__init__(text, parent)
+        self._press_global: QPoint | None = None
+        self._dragging = False
+
+    def set_reorder_enabled(self, enabled: bool) -> None:
+        self.setProperty("nativmix_strip_drag", enabled)
+        if not enabled:
+            self._press_global = None
+            self._dragging = False
 
     def mousePressEvent(self, event) -> None:
-        # Accept left-press so the event does not bubble to MainWindow.startSystemMove.
         if event.button() == Qt.MouseButton.LeftButton and bool(self.property("nativmix_strip_drag")):
+            self._press_global = event.globalPosition().toPoint()
+            self._dragging = False
+            self.grabMouse()
             event.accept()
             return
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event) -> None:
+        if self._press_global is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            if not self._dragging:
+                delta = event.globalPosition().toPoint() - self._press_global
+                if delta.manhattanLength() >= QApplication.startDragDistance():
+                    self._dragging = True
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self.reorder_finished.emit(event.globalPosition().toPoint())
+            self._press_global = None
+            self._dragging = False
+            event.accept()
+            return
+        self._press_global = None
+        self._dragging = False
+        super().mouseReleaseEvent(event)
+
     def mouseDoubleClickEvent(self, event) -> None:
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
+        self._press_global = None
+        self._dragging = False
         text, ok = QInputDialog.getText(self, "Rename Channel", "Name:", text=self.text())
         if ok and text.strip():
             self.rename_requested.emit(text.strip())
@@ -162,11 +201,52 @@ class _EditableChannelLabel(QLabel):
 class _StripDragSeparator(QFrame):
     """Horizontal rule that also acts as a strip reorder grip."""
 
+    reorder_finished = pyqtSignal(object)  # global QPoint
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._press_global: QPoint | None = None
+        self._dragging = False
+        # HLine alone is ~1px; give a usable hit target without changing look much.
+        self.setMinimumHeight(8)
+
+    def set_reorder_enabled(self, enabled: bool) -> None:
+        self.setProperty("nativmix_strip_drag", enabled)
+        if not enabled:
+            self._press_global = None
+            self._dragging = False
+
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and bool(self.property("nativmix_strip_drag")):
+            self._press_global = event.globalPosition().toPoint()
+            self._dragging = False
+            self.grabMouse()
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._press_global is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            if not self._dragging:
+                delta = event.globalPosition().toPoint() - self._press_global
+                if delta.manhattanLength() >= QApplication.startDragDistance():
+                    self._dragging = True
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        if QWidget.mouseGrabber() is self:
+            self.releaseMouse()
+        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+            self.reorder_finished.emit(event.globalPosition().toPoint())
+            self._press_global = None
+            self._dragging = False
+            event.accept()
+            return
+        self._press_global = None
+        self._dragging = False
+        super().mouseReleaseEvent(event)
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +355,6 @@ class ChannelWidget(QFrame):
         self._backend = backend
         self.is_midi_channel = is_midi
         self._compact = False
-        self._drag_start_pos: QPoint | None = None
         logger.debug("Creating ChannelWidget: index=%d, is_midi=%s", channel_index, is_midi)
 
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -285,7 +364,6 @@ class ChannelWidget(QFrame):
         # Prevent the whole column from stretching infinitely if long text is loaded
         self.setMaximumWidth(_CHANNEL_MAX_WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-        self.setAcceptDrops(True)
 
         # ── Mute Button ────────────────────────────────────────────────
         self._mute_btn = QToolButton()
@@ -333,10 +411,8 @@ class ChannelWidget(QFrame):
         self._sep.setFrameShape(QFrame.Shape.HLine)
         self._sep.setFrameShadow(QFrame.Shadow.Sunken)
         self._sep.setToolTip("Drag to reorder channel strips")
-        self._ch_label.installEventFilter(self)
-        self._sep.installEventFilter(self)
-        self._ch_label.setProperty("nativmix_strip_drag", True)
-        self._sep.setProperty("nativmix_strip_drag", True)
+        self._ch_label.reorder_finished.connect(self._on_reorder_gesture_finished)
+        self._sep.reorder_finished.connect(self._on_reorder_gesture_finished)
         self._update_drag_handle_cursor()
 
         # ── Mode Switch ────────────────────────────────────────────────
@@ -586,7 +662,6 @@ class ChannelWidget(QFrame):
     def set_compact_mode(self, compact: bool) -> None:
         """Hide app list and controls below the separator; separator stays visible."""
         self._compact = compact
-        self.setAcceptDrops(not compact)
         self._update_drag_handle_cursor()
         # Freeze width so fader spacing doesn't change when app list is hidden
         if compact:
@@ -629,60 +704,30 @@ class ChannelWidget(QFrame):
             self._remove_midi_btn.setVisible(False)
 
     def _update_drag_handle_cursor(self) -> None:
-        cursor = QCursor(Qt.CursorShape.SizeHorCursor) if not self._compact else QCursor()
+        enabled = not self._compact
+        self._ch_label.set_reorder_enabled(enabled)
+        self._sep.set_reorder_enabled(enabled)
+        cursor = QCursor(Qt.CursorShape.SizeHorCursor) if enabled else QCursor()
         self._ch_label.setCursor(cursor)
         self._sep.setCursor(cursor)
 
-    def eventFilter(self, obj, event):  # noqa: N802
-        if obj in (self._ch_label, self._sep) and not self._compact:
-            et = event.type()
-            if et == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
-                self._drag_start_pos = event.position().toPoint()
-            elif et == QEvent.Type.MouseMove and self._drag_start_pos is not None:
-                if event.buttons() & Qt.MouseButton.LeftButton:
-                    delta = event.position().toPoint() - self._drag_start_pos
-                    if delta.manhattanLength() >= QApplication.startDragDistance():
-                        self._drag_start_pos = None
-                        self._start_strip_drag()
-                        return True
-            elif et == QEvent.Type.MouseButtonRelease:
-                self._drag_start_pos = None
-        return super().eventFilter(obj, event)
-
-    def _start_strip_drag(self) -> None:
-        drag = QDrag(self)
-        mime = QMimeData()
-        mime.setData(_CHANNEL_MIME, str(self._ch).encode("utf-8"))
-        drag.setMimeData(mime)
-        drag.exec(Qt.DropAction.MoveAction)
-
-    def dragEnterEvent(self, event) -> None:  # noqa: N802
-        if self._compact or not event.mimeData().hasFormat(_CHANNEL_MIME):
-            event.ignore()
+    def _on_reorder_gesture_finished(self, global_pos: QPoint) -> None:
+        """Drop the strip under the pointer after a drag from the label/separator."""
+        if self._compact:
             return
-        event.acceptProposedAction()
-
-    def dragMoveEvent(self, event) -> None:  # noqa: N802
-        if self._compact or not event.mimeData().hasFormat(_CHANNEL_MIME):
-            event.ignore()
+        hit = QApplication.widgetAt(global_pos)
+        target: ChannelWidget | None = None
+        w = hit
+        while w is not None:
+            if isinstance(w, ChannelWidget):
+                target = w
+                break
+            w = w.parentWidget()
+        if target is None or target is self:
             return
-        event.acceptProposedAction()
-
-    def dropEvent(self, event) -> None:  # noqa: N802
-        if self._compact or not event.mimeData().hasFormat(_CHANNEL_MIME):
-            event.ignore()
-            return
-        try:
-            source_id = int(bytes(event.mimeData().data(_CHANNEL_MIME)).decode("utf-8"))
-        except (TypeError, ValueError):
-            event.ignore()
-            return
-        if source_id == self._ch:
-            event.ignore()
-            return
-        before = event.position().x() < (self.width() / 2)
-        self.strip_drop.emit(source_id, self._ch, before)
-        event.acceptProposedAction()
+        local = target.mapFromGlobal(global_pos)
+        before = local.x() < (target.width() / 2)
+        self.strip_drop.emit(self._ch, target.channel_index, before)
 
     @property
     def channel_index(self) -> int:
