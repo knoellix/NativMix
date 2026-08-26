@@ -1,6 +1,6 @@
 pkgbase = nativmix
-	pkgdesc = Hardware-assisted volume mixer for PipeWire/PulseAudio with Arduino support
-	pkgver = 1.0.4
+	pkgdesc = Hardware-based PipeWire volume & MIDI mixer for Linux. Controls physical Arduino faders, virtual sinks, and MIDI devices.
+	pkgver = 1.0.19
 	pkgrel = 1
 	url = https://github.com/knoelliX/NativMix
 	install = nativmix.install
@@ -18,7 +18,11 @@ pkgbase = nativmix
 	depends = python-mido
 	depends = python-rtmidi
 	optdepends = kvantum: Plasma transparency and blur engine support
-	source = nativmix-1.0.4.tar.gz::https://github.com/knoelliX/NativMix/archive/refs/tags/v1.0.4.tar.gz
-	sha256sums = SKIP
+	optdepends = breeze: Breeze Qt style for native KDE appearance
+	optdepends = qt6-wayland: Wayland compositor support
+	provides = nativmix
+	conflicts = nativmix-git
+	source = nativmix-1.0.19.tar.gz::https://github.com/knoelliX/NativMix/archive/refs/tags/v1.0.19.tar.gz
+	sha256sums = 0
 
 pkgname = nativmix

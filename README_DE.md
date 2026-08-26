@@ -114,6 +114,11 @@ flatpak run net.knoellix.NativMix
 
 ## Update-Verlauf
 
+**v1.0.19**
+
+- Feat: Kanal-Strips per Drag & Drop umordnen, damit die GUI zur physischen MIDI-/Arduino-Reihenfolge passt (#28)
+- Fix: V-Sink setzt die Fader-Lautstärke nicht mehr doppelt (Apps klangen leiser)
+
 **v1.0.18**
 
 - Flatpak: Manifest/Doku, Fusion Hell/Dunkel via Portal, Portal-Autostart

@@ -115,6 +115,11 @@ flatpak run net.knoellix.NativMix
 
 ## Update History
 
+**v1.0.19**
+
+- Feat: drag-and-drop reorder of channel strips so GUI order can match physical MIDI/Arduino layout (#28)
+- Fix: V-Sink routing no longer double-applies fader volume (routed apps sounded quieter)
+
 **v1.0.18**
 
 - Flatpak: local manifest/docs, Fusion light/dark via portal, portal autostart

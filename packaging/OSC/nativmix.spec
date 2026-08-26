@@ -1,5 +1,5 @@
 Name:           nativmix
-Version:        1.0.18
+Version:        1.0.19
 Release:        0
 Summary:        Hardware-based PipeWire volume & MIDI mixer for Wayland/X11
 License:        GPL-3.0-or-later
@@ -145,6 +145,9 @@ fi
 %doc README.md
 
 %changelog
+* Wed Aug 26 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.19-1
+- Feat: drag-and-drop reorder of channel strips (profile channel_order, #28)
+- Fix: V-Sink no longer double-applies fader volume on stream and null-sink
 * Wed Aug 19 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.18-1
 - Flatpak: stabilize theming baseline by using a controlled light/dark fallback path in sandboxed runtime
 - Flatpak: improve tooltip readability and startup theme consistency under Fusion-only style availability

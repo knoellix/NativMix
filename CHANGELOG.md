@@ -2,8 +2,9 @@
 
 All notable changes to NativMix are documented in this file.
 
-## Unreleased
+## v1.0.19
 
+- Feat: Drag-and-drop reorder of mixer channel strips — stable channel IDs, profile `channel_order`, drag via label/separator; disabled in compact mode (#28)
 - Fix: V-Sink routing no longer double-applies fader volume on the stream and the null-sink (apps sounded quieter when routed through a V-Sink)
 
 ## v1.0.18
