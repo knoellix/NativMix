@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -143,22 +144,30 @@ class _EditableChannelLabel(QLabel):
 
     rename_requested = pyqtSignal(str)
     reorder_finished = pyqtSignal(object)  # global QPoint on release after drag threshold
+    reorder_active_changed = pyqtSignal(bool)
 
     def __init__(self, text: str = "", parent=None) -> None:
         super().__init__(text, parent)
         self._press_global: QPoint | None = None
         self._dragging = False
+        self._reorder_enabled = False
 
     def set_reorder_enabled(self, enabled: bool) -> None:
+        self._reorder_enabled = enabled
         self.setProperty("nativmix_strip_drag", enabled)
         if not enabled:
             self._press_global = None
             self._dragging = False
+            self.reorder_active_changed.emit(False)
+            self.unsetCursor()
+        else:
+            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and bool(self.property("nativmix_strip_drag")):
+        if event.button() == Qt.MouseButton.LeftButton and self._reorder_enabled:
             self._press_global = event.globalPosition().toPoint()
             self._dragging = False
+            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             self.grabMouse()
             event.accept()
             return
@@ -170,6 +179,7 @@ class _EditableChannelLabel(QLabel):
                 delta = event.globalPosition().toPoint() - self._press_global
                 if delta.manhattanLength() >= QApplication.startDragDistance():
                     self._dragging = True
+                    self.reorder_active_changed.emit(True)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -177,21 +187,32 @@ class _EditableChannelLabel(QLabel):
     def mouseReleaseEvent(self, event) -> None:
         if QWidget.mouseGrabber() is self:
             self.releaseMouse()
-        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+        was_dragging = self._dragging
+        if event.button() == Qt.MouseButton.LeftButton and was_dragging:
             self.reorder_finished.emit(event.globalPosition().toPoint())
-            self._press_global = None
-            self._dragging = False
-            event.accept()
-            return
         self._press_global = None
         self._dragging = False
+        if was_dragging:
+            self.reorder_active_changed.emit(False)
+        if self._reorder_enabled:
+            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+        else:
+            self.unsetCursor()
+        if event.button() == Qt.MouseButton.LeftButton and was_dragging:
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:
         if QWidget.mouseGrabber() is self:
             self.releaseMouse()
+        was_dragging = self._dragging
         self._press_global = None
         self._dragging = False
+        if was_dragging:
+            self.reorder_active_changed.emit(False)
+        if self._reorder_enabled:
+            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
         text, ok = QInputDialog.getText(self, "Rename Channel", "Name:", text=self.text())
         if ok and text.strip():
             self.rename_requested.emit(text.strip())
@@ -202,24 +223,32 @@ class _StripDragSeparator(QFrame):
     """Horizontal rule that also acts as a strip reorder grip."""
 
     reorder_finished = pyqtSignal(object)  # global QPoint
+    reorder_active_changed = pyqtSignal(bool)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._press_global: QPoint | None = None
         self._dragging = False
+        self._reorder_enabled = False
         # HLine alone is ~1px; give a usable hit target without changing look much.
         self.setMinimumHeight(8)
 
     def set_reorder_enabled(self, enabled: bool) -> None:
+        self._reorder_enabled = enabled
         self.setProperty("nativmix_strip_drag", enabled)
         if not enabled:
             self._press_global = None
             self._dragging = False
+            self.reorder_active_changed.emit(False)
+            self.unsetCursor()
+        else:
+            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
 
     def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and bool(self.property("nativmix_strip_drag")):
+        if event.button() == Qt.MouseButton.LeftButton and self._reorder_enabled:
             self._press_global = event.globalPosition().toPoint()
             self._dragging = False
+            self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
             self.grabMouse()
             event.accept()
             return
@@ -231,6 +260,7 @@ class _StripDragSeparator(QFrame):
                 delta = event.globalPosition().toPoint() - self._press_global
                 if delta.manhattanLength() >= QApplication.startDragDistance():
                     self._dragging = True
+                    self.reorder_active_changed.emit(True)
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -238,14 +268,20 @@ class _StripDragSeparator(QFrame):
     def mouseReleaseEvent(self, event) -> None:
         if QWidget.mouseGrabber() is self:
             self.releaseMouse()
-        if event.button() == Qt.MouseButton.LeftButton and self._dragging:
+        was_dragging = self._dragging
+        if event.button() == Qt.MouseButton.LeftButton and was_dragging:
             self.reorder_finished.emit(event.globalPosition().toPoint())
-            self._press_global = None
-            self._dragging = False
-            event.accept()
-            return
         self._press_global = None
         self._dragging = False
+        if was_dragging:
+            self.reorder_active_changed.emit(False)
+        if self._reorder_enabled:
+            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+        else:
+            self.unsetCursor()
+        if event.button() == Qt.MouseButton.LeftButton and was_dragging:
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
 
@@ -413,6 +449,8 @@ class ChannelWidget(QFrame):
         self._sep.setToolTip("Drag to reorder channel strips")
         self._ch_label.reorder_finished.connect(self._on_reorder_gesture_finished)
         self._sep.reorder_finished.connect(self._on_reorder_gesture_finished)
+        self._ch_label.reorder_active_changed.connect(self._on_reorder_active_changed)
+        self._sep.reorder_active_changed.connect(self._on_reorder_active_changed)
         self._update_drag_handle_cursor()
 
         # ── Mode Switch ────────────────────────────────────────────────
@@ -707,9 +745,15 @@ class ChannelWidget(QFrame):
         enabled = not self._compact
         self._ch_label.set_reorder_enabled(enabled)
         self._sep.set_reorder_enabled(enabled)
-        cursor = QCursor(Qt.CursorShape.SizeHorCursor) if enabled else QCursor()
-        self._ch_label.setCursor(cursor)
-        self._sep.setCursor(cursor)
+
+    def _on_reorder_active_changed(self, active: bool) -> None:
+        """Subtle dim while dragging so the moving strip is easier to spot."""
+        if active:
+            fx = QGraphicsOpacityEffect(self)
+            fx.setOpacity(0.78)
+            self.setGraphicsEffect(fx)
+        else:
+            self.setGraphicsEffect(None)
 
     def _on_reorder_gesture_finished(self, global_pos: QPoint) -> None:
         """Drop the strip under the pointer after a drag from the label/separator."""
