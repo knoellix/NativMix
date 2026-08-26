@@ -707,6 +707,7 @@ def main() -> None:
                             if hw_idx < len(hw_vols) and hw_vols[hw_idx] >= 0.0:
                                 ch["volume"] = hw_vols[hw_idx]
                             hw_idx += 1
+                    outgoing["channel_order"] = config.get_channel_order()
                     profile_manager.save_profile(outgoing)
                 except Exception:
                     logger.warning(
@@ -842,7 +843,9 @@ def main() -> None:
             logger.exception("_on_delete_profile_requested: error deleting %r", profile_id)
 
     window.settings_panel.delete_profile_requested.connect(_on_delete_profile_requested)
-    window.settings_panel.save_profile_requested.connect(lambda: profile_manager.save_current(config.all_channels()))
+    window.settings_panel.save_profile_requested.connect(
+        lambda: profile_manager.save_current(config.all_channels(), config.get_channel_order())
+    )
 
     def _on_restore_fader_positions_changed(enabled: bool) -> None:
         if not enabled:
@@ -870,7 +873,7 @@ def main() -> None:
     window.settings_panel.restore_fader_positions_changed.connect(_on_restore_fader_positions_changed)
 
     def _on_channel_changed() -> None:
-        profile_manager.save_current(config.all_channels())
+        profile_manager.save_current(config.all_channels(), config.get_channel_order())
 
     def _on_channel_count_changed(n: int) -> None:
         old_id = profile_manager.active_profile_id
@@ -970,7 +973,7 @@ def main() -> None:
             channels = config.all_channels()
             if channel_idx < len(channels) and not channels[channel_idx].get("is_midi", False):
                 arduino.set_channel_takeover(channel_idx, value)
-            profile_manager.save_current(config.all_channels())
+            profile_manager.save_current(config.all_channels(), config.get_channel_order())
             logger.info("IPC --vol: channel %d set to %.1f%%", channel_idx + 1, value * 100)
             _push_midi_fader_feedback([(channel_idx, value)])
         except Exception:

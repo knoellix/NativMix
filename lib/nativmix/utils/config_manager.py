@@ -300,6 +300,14 @@ class ConfigManager(QObject):
         settings = self._data.setdefault("settings", {})
         settings["invert_map"] = [bool(ch.get("inverted", False)) for ch in channels]
         settings["v_sink_map"] = [bool(ch.get("v_sink", False)) for ch in channels]
+        from nativmix.utils.channel_order import normalize_channel_order
+
+        channel_ids = [int(ch.get("index", i)) for i, ch in enumerate(channels)]
+        raw_order = profile.get("channel_order")
+        self._data["channel_order"] = normalize_channel_order(
+            list(raw_order) if isinstance(raw_order, list) else None,
+            channel_ids,
+        )
         self.settings_changed.emit()
         logger.debug("Profile applied: %s (%d channels)", profile.get("id"), len(channels))
 
@@ -504,6 +512,7 @@ class ConfigManager(QObject):
         hw_count = self.hw_channel_count
 
         # Pad with empty dictionaries if needed
+        added_ids: list[int] = []
         while len(channels) < n:
             idx = len(channels)
             channels.append(
@@ -523,6 +532,7 @@ class ConfigManager(QObject):
                     "volume": 1.0,
                 }
             )
+            added_ids.append(idx)
 
         # Retroactively apply is_midi flag strictly based on index vs hw_count.
         # Channels 0 to (hw_count-1) are ALWAYS USB/Hardware.
@@ -531,6 +541,16 @@ class ConfigManager(QObject):
         for idx, ch in enumerate(channels):
             ch["is_midi"] = idx >= hw_count
             ch["index"] = idx
+
+        from nativmix.utils.channel_order import normalize_channel_order
+
+        channel_ids = list(range(len(channels)))
+        current = self._data.get("channel_order")
+        if not isinstance(current, list):
+            current = list(channel_ids)
+        else:
+            current = list(current) + [i for i in added_ids if i not in current]
+        self._data["channel_order"] = normalize_channel_order(current, channel_ids)
 
     @property
     def input_mode(self) -> str:
@@ -608,6 +628,15 @@ class ConfigManager(QObject):
         if len(v_sink) > index:
             v_sink.pop(index)
             self._data.setdefault("settings", {})["v_sink_map"] = v_sink
+
+        from nativmix.utils.channel_order import normalize_channel_order, order_after_remove
+
+        prev_order = self._data.get("channel_order")
+        if isinstance(prev_order, list):
+            remapped = order_after_remove([int(x) for x in prev_order], index)
+        else:
+            remapped = list(range(len(channels)))
+        self._data["channel_order"] = normalize_channel_order(remapped, list(range(len(channels))))
 
         self.save()
         self.settings_changed.emit()
@@ -988,6 +1017,23 @@ class ConfigManager(QObject):
     def all_channels(self) -> list[dict[str, Any]]:
         """Return a deep copy of all channel configurations."""
         return copy.deepcopy(self._data.get("channels", []))
+
+    def get_channel_order(self) -> list[int]:
+        """Left-to-right GUI order of stable channel indices."""
+        from nativmix.utils.channel_order import normalize_channel_order
+
+        channels = self._data.get("channels", [])
+        channel_ids = [int(ch.get("index", i)) for i, ch in enumerate(channels)]
+        raw = self._data.get("channel_order")
+        return normalize_channel_order(list(raw) if isinstance(raw, list) else None, channel_ids)
+
+    def set_channel_order(self, order: list[int]) -> None:
+        """Set GUI strip order (does not emit settings_changed — caller rebuilds UI)."""
+        from nativmix.utils.channel_order import normalize_channel_order
+
+        channels = self._data.get("channels", [])
+        channel_ids = [int(ch.get("index", i)) for i, ch in enumerate(channels)]
+        self._data["channel_order"] = normalize_channel_order(list(order), channel_ids)
 
     # ------------------------------------------------------------------
     # Hardware Mode

@@ -1754,7 +1754,7 @@ class MainWindow(QMainWindow):
         if self._profile_manager is None:
             return
         # Flush any pending changes to the current profile before copying
-        self._profile_manager.save_current(self._config.all_channels())
+        self._profile_manager.save_current(self._config.all_channels(), self._config.get_channel_order())
         names = {p["name"] for p in self._profile_manager.list_profiles()}
         n = len(names) + 1
         candidate = f"Profile {n}"
@@ -1765,6 +1765,7 @@ class MainWindow(QMainWindow):
             candidate,
             channel_count=self._config.hw_channel_count,
             channels=self._config.all_channels(),
+            channel_order=self._config.get_channel_order(),
         )
         self.profile_switch_requested.emit(new_id)
         # Defer focus/select until after the event loop processes the switch signal

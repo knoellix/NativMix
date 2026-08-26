@@ -158,6 +158,7 @@ class ProfileManager(QObject):
         name: str,
         channel_count: int = _DEFAULT_CHANNELS_COUNT,
         channels: list[dict] | None = None,
+        channel_order: list[int] | None = None,
     ) -> str:
         """Create a new profile and return its ID.
 
@@ -165,13 +166,19 @@ class ProfileManager(QObject):
         are generated from *channel_count*.
         """
         new_id = _next_profile_id(self._dir)
+        chans = channels if channels is not None else default_channels(channel_count)
+        if channel_order is None:
+            order = list(range(len(chans)))
+        else:
+            order = list(channel_order)
         profile = {
             "id": new_id,
             "name": name,
             "channel_count": channel_count,
             "restore_fader_positions": False,
             "midi_switch_cc": None,
-            "channels": channels if channels is not None else default_channels(channel_count),
+            "channels": chans,
+            "channel_order": order,
         }
         self._save_profile(profile)
         self._rebuild_direct_cc_map()
@@ -200,12 +207,20 @@ class ProfileManager(QObject):
         logger.debug("Profile deleted: %s", profile_id)
         self.profile_list_changed.emit()
 
-    def save_current(self, channels: list[dict]) -> None:
+    def save_current(
+        self,
+        channels: list[dict],
+        channel_order: list[int] | None = None,
+    ) -> None:
         """Persist the current channel state back to the active profile file."""
         if not self._active_profile_id:
             return
         profile = self.load(self._active_profile_id)
         profile["channels"] = channels
+        if channel_order is not None:
+            profile["channel_order"] = list(channel_order)
+        elif "channel_order" not in profile:
+            profile["channel_order"] = list(range(len(channels)))
         self._save_profile(profile)
         logger.debug("Profile saved: %s", self._active_profile_id)
 
