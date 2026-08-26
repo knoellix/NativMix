@@ -417,7 +417,7 @@ class ChannelWidget(QFrame):
       + App / + Gerät button → Toggles (Invert/VSink)
     """
 
-    strip_drop = pyqtSignal(int, int, bool)  # source_id, target_id, insert_before
+    strip_drop = pyqtSignal(int, object)  # source_id, global QPoint
     reorder_tracking = pyqtSignal(object)  # global QPoint while dragging
     reorder_active_changed = pyqtSignal(bool)
 
@@ -444,11 +444,6 @@ class ChannelWidget(QFrame):
         # Prevent the whole column from stretching infinitely if long text is loaded
         self.setMaximumWidth(_CHANNEL_MAX_WIDTH)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-
-        self._drop_hint = QFrame(self)
-        self._drop_hint.setFixedWidth(3)
-        self._drop_hint.hide()
-        self._drop_hint_side: str | None = None
 
         # ── Mute Button ────────────────────────────────────────────────
         self._mute_btn = QToolButton()
@@ -807,41 +802,12 @@ class ChannelWidget(QFrame):
             self.setGraphicsEffect(fx)
         else:
             self.setGraphicsEffect(None)
-            self.set_drop_hint(None)
-
-    def set_drop_hint(self, side: str | None) -> None:
-        """Show a highlight edge where the strip would insert ('before'/'after'/None)."""
-        self._drop_hint_side = side
-        if side is None:
-            self._drop_hint.hide()
-            return
-        accent = self.palette().color(QPalette.ColorRole.Highlight)
-        self._drop_hint.setAutoFillBackground(True)
-        pal = self._drop_hint.palette()
-        pal.setColor(QPalette.ColorRole.Window, accent)
-        self._drop_hint.setPalette(pal)
-        self._drop_hint.setGeometry(
-            0 if side == "before" else max(0, self.width() - 3),
-            0,
-            3,
-            self.height(),
-        )
-        self._drop_hint.show()
-        self._drop_hint.raise_()
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        if self._drop_hint_side is not None:
-            self.set_drop_hint(self._drop_hint_side)
 
     def _on_reorder_gesture_finished(self, global_pos: QPoint) -> None:
-        """Drop the strip under the pointer after a drag from the label/separator."""
+        """Finish strip reorder; MainWindow resolves the insert gap from the pointer."""
         if self._compact:
             return
-        target, before = _channel_drop_target_at(global_pos, exclude=self)
-        if target is None:
-            return
-        self.strip_drop.emit(self._ch, target.channel_index, before)
+        self.strip_drop.emit(self._ch, global_pos)
 
     @property
     def channel_index(self) -> int:
@@ -1301,26 +1267,6 @@ class ChannelWidget(QFrame):
 # ---------------------------------------------------------------------------
 
 
-def _channel_drop_target_at(
-    global_pos: QPoint,
-    exclude: ChannelWidget | None = None,
-) -> tuple[ChannelWidget | None, bool]:
-    """Return (target strip, insert_before) under *global_pos*, or (None, False)."""
-    hit = QApplication.widgetAt(global_pos)
-    target: ChannelWidget | None = None
-    w = hit
-    while w is not None:
-        if isinstance(w, ChannelWidget):
-            target = w
-            break
-        w = w.parentWidget()
-    if target is None or target is exclude:
-        return None, False
-    local = target.mapFromGlobal(global_pos)
-    before = local.x() < (target.width() / 2)
-    return target, before
-
-
 class MainWindow(QMainWindow):
     """
     NativMix main mixer window.
@@ -1474,10 +1420,17 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setObjectName("channels_container")
         container.setAutoFillBackground(False)
+        self._ch_container = container
         self._ch_layout = QHBoxLayout(container)
         self._ch_layout.setContentsMargins(0, 0, 0, 0)
         self._ch_layout.setSpacing(6)
         self._ch_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # Insert marker drawn in the gap between strips (not on card edges).
+        self._drop_gap = QFrame(container)
+        self._drop_gap.setFixedWidth(3)
+        self._drop_gap.hide()
+        self._drop_gap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         scroll.setWidget(container)
         root.addWidget(scroll)
@@ -1614,32 +1567,80 @@ class MainWindow(QMainWindow):
         return None
 
     def _clear_drop_hints(self) -> None:
-        for widget in self._channels:
-            widget.set_drop_hint(None)
+        self._drop_gap.hide()
+
+    def _style_drop_gap(self) -> None:
+        accent = self.palette().color(QPalette.ColorRole.Highlight)
+        self._drop_gap.setAutoFillBackground(True)
+        pal = self._drop_gap.palette()
+        pal.setColor(QPalette.ColorRole.Window, accent)
+        self._drop_gap.setPalette(pal)
+
+    def _insert_index_at(self, global_pos: QPoint) -> int | None:
+        """Visual insert slot 0..n from pointer x (gap between strip midpoints)."""
+        if not self._channels:
+            return None
+        local_x = self._ch_container.mapFromGlobal(global_pos).x()
+        for i, widget in enumerate(self._channels):
+            if local_x < widget.geometry().center().x():
+                return i
+        return len(self._channels)
+
+    def _show_gap_indicator(self, insert_at: int) -> None:
+        """Place the drop line in the spacing between strips (or ends of the row)."""
+        if not self._channels:
+            self._drop_gap.hide()
+            return
+        self._style_drop_gap()
+        spacing = self._ch_layout.spacing()
+        if insert_at <= 0:
+            x = self._channels[0].geometry().left() - max(spacing // 2, 2) - 1
+        elif insert_at >= len(self._channels):
+            x = self._channels[-1].geometry().right() + max(spacing // 2, 2) - 1
+        else:
+            left = self._channels[insert_at - 1].geometry().right()
+            right = self._channels[insert_at].geometry().left()
+            x = (left + right) // 2 - 1
+        height = max(self._ch_container.height(), self._channels[0].height())
+        self._drop_gap.setGeometry(max(0, x), 0, 3, height)
+        self._drop_gap.show()
+        self._drop_gap.raise_()
 
     def _on_reorder_active_changed(self, active: bool) -> None:
         if not active:
             self._clear_drop_hints()
 
     def _on_reorder_tracking(self, global_pos: QPoint) -> None:
-        """Highlight the insert edge under the cursor while dragging a strip."""
-        self._clear_drop_hints()
-        target, before = _channel_drop_target_at(global_pos)
-        if target is None:
+        """Show insert gap under the cursor while dragging a strip."""
+        insert_at = self._insert_index_at(global_pos)
+        if insert_at is None:
+            self._clear_drop_hints()
             return
-        target.set_drop_hint("before" if before else "after")
+        self._show_gap_indicator(insert_at)
 
-    def _on_strip_drop(self, source_id: int, target_id: int, before: bool) -> None:
+    def _on_strip_drop(self, source_id: int, global_pos: QPoint) -> None:
         self._clear_drop_hints()
-        order = self._config.get_channel_order()
-        if source_id not in order or target_id not in order or source_id == target_id:
+        visual = [w.channel_index for w in self._channels]
+        if source_id not in visual:
             return
-        order = [cid for cid in order if cid != source_id]
-        insert_at = order.index(target_id)
-        if not before:
-            insert_at += 1
-        order.insert(insert_at, source_id)
-        self._config.set_channel_order(order)
+        insert_at = self._insert_index_at(global_pos)
+        if insert_at is None:
+            return
+        # Adjust if removing source shifts slots to the right of it.
+        src_visual = visual.index(source_id)
+        if src_visual < insert_at:
+            insert_at -= 1
+        visual = [cid for cid in visual if cid != source_id]
+        insert_at = max(0, min(insert_at, len(visual)))
+        visual.insert(insert_at, source_id)
+
+        # Keep any non-visible channel ids (e.g. MIDI hidden in USB mode) stable at end.
+        full = self._config.get_channel_order()
+        hidden = [cid for cid in full if cid not in visual]
+        new_order = visual + hidden
+        if new_order == full:
+            return
+        self._config.set_channel_order(new_order)
         if self._profile_manager is not None:
             self._profile_manager.save_current(self._config.all_channels(), self._config.get_channel_order())
         self._rebuild_channels()
