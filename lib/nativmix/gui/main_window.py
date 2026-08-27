@@ -171,99 +171,15 @@ def _force_clear_cursor_overrides() -> None:
 
 
 class _EditableChannelLabel(QLabel):
-    """Channel name: double-click renames; drag reorders the strip."""
+    """Channel name: double-click to rename (reorder uses the separator below)."""
 
     rename_requested = pyqtSignal(str)
-    reorder_finished = pyqtSignal(object)  # global QPoint on release after drag threshold
-    reorder_active_changed = pyqtSignal(bool)
-    reorder_tracking = pyqtSignal(object)  # global QPoint while dragging
 
     def __init__(self, text: str = "", parent=None) -> None:
         super().__init__(text, parent)
-        self._press_global: QPoint | None = None
-        self._dragging = False
-        self._reorder_enabled = False
-        self._grab_cursor_pushed = False
-        self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
-
-    def set_reorder_enabled(self, enabled: bool) -> None:
-        self._reorder_enabled = enabled
-        self.setProperty("nativmix_strip_drag", enabled)
-        if not enabled:
-            self._press_global = None
-            self._dragging = False
-            self._release_grab_cursor()
-            self.reorder_active_changed.emit(False)
-            self.unsetCursor()
-        else:
-            self.setCursor(QCursor(_GRIP_CURSOR))
-
-    def _release_grab_cursor(self) -> None:
-        if self._grab_cursor_pushed:
-            self._grab_cursor_pushed = False
-            _force_clear_cursor_overrides()
-
-    def enterEvent(self, event) -> None:
-        if self._reorder_enabled and not self._grab_cursor_pushed:
-            self.setCursor(QCursor(_GRIP_CURSOR))
-        super().enterEvent(event)
-
-    def mousePressEvent(self, event) -> None:
-        if event.button() == Qt.MouseButton.LeftButton and self._reorder_enabled:
-            self._press_global = event.globalPosition().toPoint()
-            self._dragging = False
-            _push_grip_cursor()
-            self._grab_cursor_pushed = True
-            self.grabMouse()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:
-        if self._press_global is not None and event.buttons() & Qt.MouseButton.LeftButton:
-            pos = event.globalPosition().toPoint()
-            if not self._dragging:
-                delta = pos - self._press_global
-                if delta.manhattanLength() >= QApplication.startDragDistance():
-                    self._dragging = True
-                    self.reorder_active_changed.emit(True)
-            if self._dragging:
-                self.reorder_tracking.emit(pos)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:
-        if QWidget.mouseGrabber() is self:
-            self.releaseMouse()
-        was_dragging = self._dragging
-        if event.button() == Qt.MouseButton.LeftButton and was_dragging:
-            self.reorder_finished.emit(event.globalPosition().toPoint())
-        self._press_global = None
-        self._dragging = False
-        self._release_grab_cursor()
-        if was_dragging:
-            self.reorder_active_changed.emit(False)
-        if self._reorder_enabled:
-            self.setCursor(QCursor(_GRIP_CURSOR))
-        else:
-            self.unsetCursor()
-        if event.button() == Qt.MouseButton.LeftButton and was_dragging:
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
+        self.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
 
     def mouseDoubleClickEvent(self, event) -> None:
-        if QWidget.mouseGrabber() is self:
-            self.releaseMouse()
-        was_dragging = self._dragging
-        self._press_global = None
-        self._dragging = False
-        self._release_grab_cursor()
-        if was_dragging:
-            self.reorder_active_changed.emit(False)
-        if self._reorder_enabled:
-            self.setCursor(QCursor(_GRIP_CURSOR))
         text, ok = QInputDialog.getText(self, "Rename Channel", "Name:", text=self.text())
         if ok and text.strip():
             self.rename_requested.emit(text.strip())
@@ -508,7 +424,7 @@ class ChannelWidget(QFrame):
         self._ch_label = _EditableChannelLabel(label_text)
         self._ch_label.setObjectName("ch_label")
         self._ch_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        self._ch_label.setToolTip("Double-click to rename · drag to reorder")
+        self._ch_label.setToolTip("Double-click to rename")
         self._ch_label.rename_requested.connect(self._on_rename)
         tiny = self._ch_label.font()
         tiny.setPointSize(8)
@@ -520,13 +436,9 @@ class ChannelWidget(QFrame):
         self._sep.setFrameShape(QFrame.Shape.HLine)
         self._sep.setFrameShadow(QFrame.Shadow.Sunken)
         self._sep.setToolTip("Drag to reorder channel strips")
-        self._ch_label.reorder_finished.connect(self._on_reorder_gesture_finished)
         self._sep.reorder_finished.connect(self._on_reorder_gesture_finished)
-        self._ch_label.reorder_active_changed.connect(self._on_reorder_active_changed)
         self._sep.reorder_active_changed.connect(self._on_reorder_active_changed)
-        self._ch_label.reorder_tracking.connect(self.reorder_tracking.emit)
         self._sep.reorder_tracking.connect(self.reorder_tracking.emit)
-        self._ch_label.reorder_active_changed.connect(self.reorder_active_changed.emit)
         self._sep.reorder_active_changed.connect(self.reorder_active_changed.emit)
         self._update_drag_handle_cursor()
 
@@ -825,7 +737,6 @@ class ChannelWidget(QFrame):
 
     def _update_drag_handle_cursor(self) -> None:
         enabled = not self._compact and not self._drag_blocked
-        self._ch_label.set_reorder_enabled(enabled)
         self._sep.set_reorder_enabled(enabled)
 
     def _on_reorder_active_changed(self, active: bool) -> None:
