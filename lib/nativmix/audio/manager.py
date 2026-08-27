@@ -420,6 +420,8 @@ class _AudioListenerThread(QThread):
         vol = state.get("vol", self._config.get_channel_volume(target_ch))
         vsink_enabled = state.get("v_sink", self._config.is_v_sink_enabled(target_ch))
         vsink_name = f"NativMix_CH_{target_ch}"
+        paused_apps = {str(n).lower() for n in state.get("routing_paused_apps", [])}
+        routing_paused = info.app_name.lower() in paused_apps
 
         try:
             current_sink = self._sink_name_for_stream(pulse, info.index, fallback=info.props.get("sink_name"))
@@ -445,12 +447,15 @@ class _AudioListenerThread(QThread):
                 vsink_enabled=vsink_enabled,
                 vsink_name=vsink_name,
                 default_sink=default_sink,
+                routing_paused=routing_paused,
             )
-            if route_to is None and is_easyeffects_sink(current_sink):
+            if route_to is None and (routing_paused or is_easyeffects_sink(current_sink)):
                 logger.debug(
-                    "EE hold: leaving %s on %s (vol/mute still applied on stream)",
+                    "Routing hold: leaving %s on %s (paused=%s ee=%s)",
                     info.app_name,
                     current_sink,
+                    routing_paused,
+                    is_easyeffects_sink(current_sink),
                 )
             if route_to is not None:
                 now = time.monotonic()
@@ -723,6 +728,7 @@ class PipeWireManager(AudioBackendBase):
     mute_state_changed = pyqtSignal(int, bool)
     channel_volume_changed = pyqtSignal(int, float)
     other_apps_changed = pyqtSignal(list)
+    routing_status_changed = pyqtSignal()  # active stream sinks may have changed
     audit_finished = pyqtSignal()
     status_changed = pyqtSignal(str, str)  # (status_type, message) — forwarded from _AudioListenerThread
 
@@ -841,6 +847,8 @@ class PipeWireManager(AudioBackendBase):
                     self._last_other_apps = unmapped_found
                     self.other_apps_changed.emit(unmapped_found)
 
+                self.routing_status_changed.emit()
+
         except pulsectl.PulseError as exc:
             logger.error("Failed to list active streams: %s", exc)
             with self._state_lock:
@@ -938,6 +946,7 @@ class PipeWireManager(AudioBackendBase):
                     "v_sink": self._config.is_v_sink_enabled(ch),
                     "v_sink_busy": ch in self._vsink_creating,
                     "apps": self._config.get_app_names(ch),
+                    "routing_paused_apps": self._config.get_routing_paused_apps(ch),
                     "mode": self._config.get_channel_mode(ch),
                 }
                 for ch in range(self._config.num_channels)
@@ -1237,6 +1246,36 @@ class PipeWireManager(AudioBackendBase):
             self._active_streams[info.index] = info
         logger.debug("Stream changed: [%d] %s vol=%.2f muted=%s", info.index, info.app_name, info.volume, info.muted)
 
+    def get_app_sink_names(self) -> dict[str, str]:
+        """
+        Return lowercased app name → current playback sink name for active streams.
+
+        Used by the GUI to dim apps that NativMix is not currently routing
+        (Easy Effects hold or other external destination).
+        """
+        result: dict[str, str] = {}
+        with self._state_lock:
+            streams = list(self._active_streams.values())
+        try:
+            with pulsectl.Pulse("nativmix-app-sinks") as pulse:
+                sink_names = {s.index: s.name for s in pulse.sink_list()}
+                for info in streams:
+                    name = (info.app_name or "").lower()
+                    if not name:
+                        continue
+                    sink = None
+                    try:
+                        si = pulse.sink_input_info(info.index)
+                        if si and not isinstance(si, int):
+                            sink = sink_names.get(si.sink)
+                    except pulsectl.PulseError:
+                        sink = (info.props or {}).get("sink_name")
+                    if sink:
+                        result[name] = sink
+        except pulsectl.PulseError as exc:
+            logger.debug("get_app_sink_names failed: %s", exc)
+        return result
+
     def on_mapping_changed(self, channel_index: int, app_names: list[str]) -> None:
         """
         Slot: called when the GUI updates a channel mapping via ConfigManager.
@@ -1347,15 +1386,6 @@ class PipeWireManager(AudioBackendBase):
                     if target_sink:
                         for si in pulse.sink_input_list():
                             current_name = sink_by_index.get(si.sink)
-                            if is_easyeffects_sink(current_name):
-                                logger.debug(
-                                    "EE hold: not routing added app stream %d from %s",
-                                    si.index,
-                                    current_name,
-                                )
-                                continue
-                            if si.sink == target_sink.index:
-                                continue
                             props = dict(si.proplist)
                             pid_str = props.get("application.process.id", "0")
                             try:
@@ -1364,6 +1394,22 @@ class PipeWireManager(AudioBackendBase):
                                 pid = 0
                             resolved = resolve_app_name(pid, fallback=_pa_name_fallback(props))
                             if resolved.lower() not in added:
+                                continue
+                            if self._config.is_app_routing_paused(channel_index, resolved):
+                                logger.debug(
+                                    "Routing paused: not moving added app '%s' on CH%d",
+                                    resolved,
+                                    channel_index,
+                                )
+                                continue
+                            if is_easyeffects_sink(current_name):
+                                logger.debug(
+                                    "EE hold: not routing added app stream %d from %s",
+                                    si.index,
+                                    current_name,
+                                )
+                                continue
+                            if si.sink == target_sink.index:
                                 continue
 
                             logger.debug(
@@ -1469,6 +1515,9 @@ class PipeWireManager(AudioBackendBase):
                     # Ignore channels in hardware mode
                     if target_ch is not None and self._config.get_channel_mode(target_ch) == "hardware":
                         target_ch = None
+
+                    if target_ch is not None and self._config.is_app_routing_paused(target_ch, resolved):
+                        continue
 
                     # Case A: App mapped to a V-Sink channel
                     if target_ch is not None and target_ch in v_sinks:
@@ -2512,6 +2561,11 @@ class PipeWireManager(AudioBackendBase):
                     resolved = resolve_app_name(pid, fallback=_pa_name_fallback(props))
 
                     if resolved.lower() not in app_names:
+                        continue
+                    if self._config.is_app_routing_paused(channel_index, resolved):
+                        continue
+                    sink_name = next((s.name for s in pulse.sink_list() if s.index == si.sink), None)
+                    if is_easyeffects_sink(sink_name):
                         continue
 
                     if si.sink != target_sink.index:

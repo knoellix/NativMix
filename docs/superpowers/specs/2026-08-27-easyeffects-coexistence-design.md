@@ -1,9 +1,9 @@
 # Design: Easy Effects coexistence — automatic stream hold (Phase 1)
 
 Date: 2026-08-27  
-Status: **Phase 1 Automatik implemented** (2026-08-27) — GUI / manual off later  
+Status: **Phase 1 + Phase 2 GUI implemented** (2026-08-27)  
 Related: `.cursor/plans/easy-effects-study.md`  
-Code: `lib/nativmix/audio/easyeffects_hold.py`, wired in `lib/nativmix/audio/manager.py`
+Code: `easyeffects_hold.py`, `manager.py`, config `routing_paused_apps`, `_AppRow` context menu
 
 ---
 
@@ -64,15 +64,13 @@ One channel fader/mute may update V-Sink gain **and/or** stream gain/mute for mi
 
 ---
 
-## Phase 2 — Manual abschalten (later)
+## Phase 2 — Manual pause (GUI)
 
-Because Phase 1 means NM **actively claims** destinations (V-Sink *or* default), a clean GUI switch is desirable:
-
-- Per channel (or per app): **NM auto-routing off** — only volume/mute, never `move-sink-input`  
-- Optional status: “held by Easy Effects” / “routing paused”  
-- Optional global override  
-
-Phase 2 is intentional follow-up, not blocked by Phase 1.
+- **Right-click** an app in the channel list → „Pause NativMix routing“ / „Resume…“
+- Persisted per channel as `routing_paused_apps` in the profile
+- Same routing rule as EE hold (no move; volume/mute stay)
+- **Text color:** accent when NativMix owns the destination; disabled/muted when paused or externally held (e.g. Easy Effects)
+- System Master: no pause menu (sink itself)
 
 ---
 

@@ -31,14 +31,15 @@ def resolve_auto_route_target(
     vsink_enabled: bool,
     vsink_name: str,
     default_sink: str | None,
+    routing_paused: bool = False,
 ) -> str | None:
     """
     Return the sink name to move a mapped stream to, or None for no move.
 
-    None means: held by Easy Effects, already on the intended target, or
-    missing a usable default sink when V-Sink is off.
+    None means: held by Easy Effects, manually paused, already on the intended
+    target, or missing a usable default sink when V-Sink is off.
     """
-    if is_easyeffects_sink(current_sink):
+    if routing_paused or is_easyeffects_sink(current_sink):
         return None
 
     if vsink_enabled:

@@ -39,7 +39,7 @@ from PyQt6.QtCore import (
     pyqtSignal,
     pyqtSlot,
 )
-from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
+from PyQt6.QtGui import QAction, QColor, QCursor, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -63,6 +63,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from nativmix.audio.easyeffects_hold import is_easyeffects_sink
 from nativmix.gui.settings_panel import SettingsPanel
 from nativmix.utils.paths import is_windows
 from nativmix.utils.proc_resolver import GENERIC_PA_NAMES
@@ -279,9 +280,13 @@ class _StripDragSeparator(QFrame):
 class _AppRow(QWidget):
     """[×] [name]  – one per assigned app inside a channel."""
 
+    routing_pause_toggled = pyqtSignal(str, bool)  # app_name, paused
+
     def __init__(self, app_name: str, on_remove, parent=None) -> None:
         super().__init__(parent)
         self.app_name = app_name
+        self._routing_paused = False
+        self._nm_routed = True
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
@@ -307,17 +312,49 @@ class _AppRow(QWidget):
         layout.addWidget(self._remove_btn)
         layout.addWidget(self._name_label)
 
+        if app_name.lower() != "system master":
+            self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.customContextMenuRequested.connect(self._show_context_menu)
+
         self.update_dynamic_styles()
 
     def set_name_tooltip(self, text: str) -> None:
         """Set the tooltip on the app name label."""
         self._name_label.setToolTip(text)
 
+    def set_routing_state(self, *, paused: bool, nm_routed: bool) -> None:
+        """Update pause flag and whether NativMix currently owns the destination."""
+        self._routing_paused = paused
+        self._nm_routed = nm_routed
+        tip = f"App: {self.app_name}"
+        if paused:
+            tip += "\nNativMix routing paused (volume/mute still apply)."
+        elif not nm_routed:
+            tip += "\nRouted outside NativMix (e.g. Easy Effects)."
+        self._name_label.setToolTip(tip)
+        self.update_dynamic_styles()
+
+    def _show_context_menu(self, pos) -> None:
+        menu = QMenu(self)
+        if self._routing_paused:
+            action = QAction("Resume NativMix routing", self)
+            action.triggered.connect(lambda _=False: self.routing_pause_toggled.emit(self.app_name, False))
+        else:
+            action = QAction("Pause NativMix routing", self)
+            action.setToolTip(
+                "Do not move this app to a V-Sink or the default sink. "
+                "Use for Easy Effects or other external routing. Volume and mute still work."
+            )
+            action.triggered.connect(lambda _=False: self.routing_pause_toggled.emit(self.app_name, True))
+        menu.addAction(action)
+        menu.exec(self.mapToGlobal(pos))
+
     def update_dynamic_styles(self) -> None:
         """Tint the X button to match the system Highlight color and apply custom hover state."""
         palette = QApplication.palette()
         accent_color = palette.color(QPalette.ColorRole.Highlight)
         accent_hex = accent_color.name()
+        muted_color = palette.color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText)
 
         base_icon = QIcon.fromTheme("list-remove").pixmap(18, 18)
 
@@ -339,10 +376,10 @@ class _AppRow(QWidget):
         """
         self._remove_btn.setStyleSheet(btn_style)
 
-        # Also color the app name label
-        # Use QPalette instead of setStyleSheet to avoid breaking native tooltips on Wayland
+        # Accent when NativMix routes this app; disabled/muted text when not.
+        text_color = accent_color if self._nm_routed and not self._routing_paused else muted_color
         pal = self._name_label.palette()
-        pal.setColor(QPalette.ColorRole.WindowText, accent_color)
+        pal.setColor(QPalette.ColorRole.WindowText, text_color)
         self._name_label.setPalette(pal)
 
 
@@ -941,8 +978,30 @@ class ChannelWidget(QFrame):
                 display_name = parts[1] if len(parts) == 2 else hw_id
                 self._app_list_layout.addWidget(_AppRow(display_name, on_remove=self._remove_hw))
         else:
+            sink_by_app = {}
+            if hasattr(self._backend, "get_app_sink_names"):
+                try:
+                    sink_by_app = self._backend.get_app_sink_names()
+                except Exception as exc:
+                    logger.debug("get_app_sink_names failed: %s", exc)
+            vsink_name = f"NativMix_CH_{self._ch}"
+            vsink_on = self._config.is_v_sink_enabled(self._ch)
             for name in self._config.get_app_names(self._ch):
-                self._app_list_layout.addWidget(_AppRow(name, on_remove=lambda _=False, n=name: self._remove_app(n)))
+                row = _AppRow(name, on_remove=lambda _=False, n=name: self._remove_app(n))
+                row.routing_pause_toggled.connect(self._on_app_routing_pause_toggled)
+                paused = self._config.is_app_routing_paused(self._ch, name)
+                sink = sink_by_app.get(name.lower())
+                if paused:
+                    nm_routed = False
+                elif sink is None:
+                    # No live stream — treat as OK (not externally held).
+                    nm_routed = True
+                elif vsink_on:
+                    nm_routed = sink == vsink_name
+                else:
+                    nm_routed = not is_easyeffects_sink(sink) and not sink.startswith("NativMix_")
+                row.set_routing_state(paused=paused, nm_routed=nm_routed)
+                self._app_list_layout.addWidget(row)
 
         # Hide V-Sink for special pseudo-apps (System Master / Other Apps),
         # hardware mode, or when running on Windows (no PipeWire null-sinks).
@@ -951,6 +1010,42 @@ class ChannelWidget(QFrame):
         has_special = any(n in _SPECIAL for n in app_names_lower)
         is_hw = self._config.get_channel_mode(self._ch) == "hardware"
         self._vsink_cb.setVisible(not has_special and not is_hw and not is_windows())
+
+    @pyqtSlot(str, bool)
+    @_slot_guard
+    def _on_app_routing_pause_toggled(self, app_name: str, paused: bool) -> None:
+        self._config.set_app_routing_paused(self._ch, app_name, paused)
+        self._config.save()
+        self._refresh_app_list()
+
+    def refresh_app_routing_styles(self) -> None:
+        """Update pause/NM-routed colors without rebuilding the whole list."""
+        if self._config.get_channel_mode(self._ch) == "hardware":
+            return
+        sink_by_app: dict[str, str] = {}
+        if hasattr(self._backend, "get_app_sink_names"):
+            try:
+                sink_by_app = self._backend.get_app_sink_names()
+            except Exception as exc:
+                logger.debug("get_app_sink_names failed: %s", exc)
+        vsink_name = f"NativMix_CH_{self._ch}"
+        vsink_on = self._config.is_v_sink_enabled(self._ch)
+        for i in range(self._app_list_layout.count()):
+            item = self._app_list_layout.itemAt(i)
+            row = item.widget() if item else None
+            if not isinstance(row, _AppRow):
+                continue
+            paused = self._config.is_app_routing_paused(self._ch, row.app_name)
+            sink = sink_by_app.get(row.app_name.lower())
+            if paused:
+                nm_routed = False
+            elif sink is None:
+                nm_routed = True
+            elif vsink_on:
+                nm_routed = sink == vsink_name
+            else:
+                nm_routed = not is_easyeffects_sink(sink) and not sink.startswith("NativMix_")
+            row.set_routing_state(paused=paused, nm_routed=nm_routed)
 
     def _remove_app(self, app_name: str) -> None:
         self._config.remove_app_name(self._ch, app_name)
@@ -1446,6 +1541,8 @@ class MainWindow(QMainWindow):
         self._config.settings_changed.connect(self._apply_transparency)
         self._config.settings_changed.connect(self._on_settings_updated)
         self._backend.other_apps_changed.connect(self._on_other_apps_changed)
+        if hasattr(self._backend, "routing_status_changed"):
+            self._backend.routing_status_changed.connect(self._on_routing_status_changed)
 
         # Qt emits paletteChanged when the system theme switches – no CSS needed
         QApplication.instance().paletteChanged.connect(self._on_palette_changed)
@@ -2257,6 +2354,14 @@ class MainWindow(QMainWindow):
         """Dynamically updates the tooltip for the 'Other Apps' channel."""
         for ch_widget in self._channels:
             ch_widget.set_other_apps_tooltip(names)
+
+    @pyqtSlot()
+    @_slot_guard
+    def _on_routing_status_changed(self) -> None:
+        """Refresh app-row colors when live sink destinations change."""
+        for ch_widget in self._channels:
+            if not ch_widget._compact:
+                ch_widget.refresh_app_routing_styles()
 
     @pyqtSlot()
     @_slot_guard

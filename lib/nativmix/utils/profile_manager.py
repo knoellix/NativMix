@@ -39,6 +39,7 @@ def default_channels(count: int) -> list[dict[str, Any]]:
             "mode": "app",
             "hardware_id": None,
             "volume": 1.0,
+            "routing_paused_apps": [],
         }
         for i in range(count)
     ]

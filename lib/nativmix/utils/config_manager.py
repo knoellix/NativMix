@@ -840,6 +840,7 @@ class ConfigManager(QObject):
                     "midi_bindings": [{"cc": None, "midi_channel": 0}],
                     "hardware_id": None,
                     "app_names": [],
+                    "routing_paused_apps": [],
                 }
             )
         return channels[index]
@@ -864,8 +865,38 @@ class ConfigManager(QObject):
             channel: Zero-based channel index.
             names:   List of human-readable app name strings.
         """
-        self._channel(channel)["app_names"] = list(names)
+        ch = self._channel(channel)
+        ch["app_names"] = list(names)
+        # Drop pause flags for apps no longer mapped here.
+        kept = {n.lower() for n in names}
+        paused = [n for n in ch.get("routing_paused_apps", []) if str(n).lower() in kept]
+        ch["routing_paused_apps"] = paused
         self.mapping_changed.emit(channel, list(names))
+
+    def get_routing_paused_apps(self, channel: int) -> list[str]:
+        """Return app names on *channel* whose NativMix auto-routing is paused."""
+        return list(self._channel(channel).get("routing_paused_apps", []))
+
+    def is_app_routing_paused(self, channel: int, app_name: str) -> bool:
+        """True when *app_name* on *channel* should not be auto-routed by NativMix."""
+        needle = app_name.lower()
+        return any(str(n).lower() == needle for n in self.get_routing_paused_apps(channel))
+
+    def set_app_routing_paused(self, channel: int, app_name: str, paused: bool) -> None:
+        """Pause or resume NativMix auto-routing for one mapped app (volume/mute stay)."""
+        ch = self._channel(channel)
+        apps = {n.lower() for n in ch.get("app_names", [])}
+        if app_name.lower() not in apps:
+            return
+        paused_list = list(ch.get("routing_paused_apps", []))
+        # Keep canonical casing from app_names when adding.
+        canonical = next((n for n in ch.get("app_names", []) if n.lower() == app_name.lower()), app_name)
+        without = [n for n in paused_list if str(n).lower() != app_name.lower()]
+        if paused:
+            without.append(canonical)
+        ch["routing_paused_apps"] = without
+        self.mapping_changed.emit(channel, list(ch.get("app_names", [])))
+        logger.debug("routing_paused CH%d '%s' → %s", channel, canonical, paused)
 
     def update_mapping(self, app_name: str, channel_index: int) -> None:
         """
@@ -885,6 +916,8 @@ class ConfigManager(QObject):
             if app_name in names:
                 names.remove(app_name)
                 ch["app_names"] = names
+                kept = {n.lower() for n in names}
+                ch["routing_paused_apps"] = [n for n in ch.get("routing_paused_apps", []) if str(n).lower() in kept]
                 self.mapping_changed.emit(int(ch["index"]), list(names))
 
         # Enforce Isolation for "System Master" and "Other Apps"

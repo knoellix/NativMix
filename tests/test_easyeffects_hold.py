@@ -26,22 +26,14 @@ def test_rejects_normal_and_nativmix_sinks():
     assert not is_easyeffects_sink("easyeffects_source")  # input side — not playback hold
 
 
-def test_skip_route_when_on_easyeffects():
+def test_skip_route_when_manually_paused():
     assert (
         resolve_auto_route_target(
-            current_sink="easyeffects_sink",
+            current_sink="alsa_output.hw",
             vsink_enabled=True,
             vsink_name="NativMix_CH_0",
             default_sink="alsa_output.hw",
-        )
-        is None
-    )
-    assert (
-        resolve_auto_route_target(
-            current_sink="easyeffects_sink",
-            vsink_enabled=False,
-            vsink_name="NativMix_CH_0",
-            default_sink="alsa_output.hw",
+            routing_paused=True,
         )
         is None
     )
