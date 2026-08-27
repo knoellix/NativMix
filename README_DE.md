@@ -117,6 +117,7 @@ flatpak run net.knoellix.NativMix
 **v1.0.19**
 
 - Feat: Kanal-Strips per Drag & Drop umordnen, damit die GUI zur physischen MIDI-/Arduino-Reihenfolge passt (#28)
+- Feat: Easy-Effects-Koexistenz + Routing-Pause pro App (Rechtsklick); Lautstärke/Mute bleiben aktiv
 - Fix: V-Sink setzt die Fader-Lautstärke nicht mehr doppelt (Apps klangen leiser)
 
 **v1.0.18**

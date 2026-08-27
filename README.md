@@ -118,6 +118,7 @@ flatpak run net.knoellix.NativMix
 **v1.0.19**
 
 - Feat: drag-and-drop reorder of channel strips so GUI order can match physical MIDI/Arduino layout (#28)
+- Feat: Easy Effects coexistence + per-app routing pause (right-click); volume/mute stay active while routing is held
 - Fix: V-Sink routing no longer double-applies fader volume (routed apps sounded quieter)
 
 **v1.0.18**
