@@ -156,16 +156,17 @@ _CHANNEL_MAX_WIDTH = 85
 # ---------------------------------------------------------------------------
 
 
-_GRIP_HOVER_CURSOR = Qt.CursorShape.SizeHorCursor
-_GRIP_GRAB_CURSOR = Qt.CursorShape.ClosedHandCursor
+# Left/right only — ClosedHand often falls back to SizeAll (4-way) on Linux themes.
+_GRIP_CURSOR = Qt.CursorShape.SizeHorCursor
 
 
-def _push_grab_cursor() -> None:
-    QApplication.setOverrideCursor(QCursor(_GRIP_GRAB_CURSOR))
+def _push_grip_cursor() -> None:
+    QApplication.setOverrideCursor(QCursor(_GRIP_CURSOR))
 
 
-def _pop_grab_cursor() -> None:
-    if QApplication.overrideCursor() is not None:
+def _force_clear_cursor_overrides() -> None:
+    """Ensure no stuck override (e.g. theme fallback) hides the grip hover cursor."""
+    while QApplication.overrideCursor() is not None:
         QApplication.restoreOverrideCursor()
 
 
@@ -195,18 +196,23 @@ class _EditableChannelLabel(QLabel):
             self.reorder_active_changed.emit(False)
             self.unsetCursor()
         else:
-            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
+            self.setCursor(QCursor(_GRIP_CURSOR))
 
     def _release_grab_cursor(self) -> None:
         if self._grab_cursor_pushed:
-            _pop_grab_cursor()
             self._grab_cursor_pushed = False
+            _force_clear_cursor_overrides()
+
+    def enterEvent(self, event) -> None:
+        if self._reorder_enabled and not self._grab_cursor_pushed:
+            self.setCursor(QCursor(_GRIP_CURSOR))
+        super().enterEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._reorder_enabled:
             self._press_global = event.globalPosition().toPoint()
             self._dragging = False
-            _push_grab_cursor()
+            _push_grip_cursor()
             self._grab_cursor_pushed = True
             self.grabMouse()
             event.accept()
@@ -239,7 +245,7 @@ class _EditableChannelLabel(QLabel):
         if was_dragging:
             self.reorder_active_changed.emit(False)
         if self._reorder_enabled:
-            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
+            self.setCursor(QCursor(_GRIP_CURSOR))
         else:
             self.unsetCursor()
         if event.button() == Qt.MouseButton.LeftButton and was_dragging:
@@ -257,7 +263,7 @@ class _EditableChannelLabel(QLabel):
         if was_dragging:
             self.reorder_active_changed.emit(False)
         if self._reorder_enabled:
-            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
+            self.setCursor(QCursor(_GRIP_CURSOR))
         text, ok = QInputDialog.getText(self, "Rename Channel", "Name:", text=self.text())
         if ok and text.strip():
             self.rename_requested.emit(text.strip())
@@ -291,18 +297,23 @@ class _StripDragSeparator(QFrame):
             self.reorder_active_changed.emit(False)
             self.unsetCursor()
         else:
-            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
+            self.setCursor(QCursor(_GRIP_CURSOR))
 
     def _release_grab_cursor(self) -> None:
         if self._grab_cursor_pushed:
-            _pop_grab_cursor()
             self._grab_cursor_pushed = False
+            _force_clear_cursor_overrides()
+
+    def enterEvent(self, event) -> None:
+        if self._reorder_enabled and not self._grab_cursor_pushed:
+            self.setCursor(QCursor(_GRIP_CURSOR))
+        super().enterEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton and self._reorder_enabled:
             self._press_global = event.globalPosition().toPoint()
             self._dragging = False
-            _push_grab_cursor()
+            _push_grip_cursor()
             self._grab_cursor_pushed = True
             self.grabMouse()
             event.accept()
@@ -335,7 +346,7 @@ class _StripDragSeparator(QFrame):
         if was_dragging:
             self.reorder_active_changed.emit(False)
         if self._reorder_enabled:
-            self.setCursor(QCursor(_GRIP_HOVER_CURSOR))
+            self.setCursor(QCursor(_GRIP_CURSOR))
         else:
             self.unsetCursor()
         if event.button() == Qt.MouseButton.LeftButton and was_dragging:
@@ -1632,6 +1643,7 @@ class MainWindow(QMainWindow):
             w.set_drag_blocked(False)
         self._ch_layout.addStretch()
         self._layout_detached = False
+        _force_clear_cursor_overrides()
 
     def _stop_live_anim(self) -> None:
         if self._live_anim is not None:
