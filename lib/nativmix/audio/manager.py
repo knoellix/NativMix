@@ -49,6 +49,11 @@ import pulsectl
 from PyQt6.QtCore import QThread, QTimer, pyqtSignal, pyqtSlot
 
 from nativmix.audio.base import AudioBackendBase, StreamInfo
+from nativmix.audio.easyeffects_hold import (
+    is_easyeffects_sink,
+    resolve_auto_route_target,
+    volume_apply_mode,
+)
 from nativmix.utils import routing
 from nativmix.utils.config_manager import ConfigManager
 from nativmix.utils.proc_resolver import GENERIC_PA_NAMES, invalidate_cache, resolve_app_name
@@ -403,7 +408,7 @@ class _AudioListenerThread(QThread):
             )
 
     def _apply_auto_reconnect(self, pulse: pulsectl.Pulse, info: StreamInfo) -> None:
-        """Apply volume and V-Sink routing based on persistence config."""
+        """Apply volume and destination routing based on persistence config."""
         # 1. Exact mapping or Other Apps catch-all
         target_ch = self._resolve_target_channel(info.app_name)
         if target_ch is None:
@@ -414,85 +419,100 @@ class _AudioListenerThread(QThread):
             state = dict(self.channel_states.get(target_ch, {}))
         vol = state.get("vol", self._config.get_channel_volume(target_ch))
         vsink_enabled = state.get("v_sink", self._config.is_v_sink_enabled(target_ch))
+        vsink_name = f"NativMix_CH_{target_ch}"
 
         try:
-            if vsink_enabled:
-                # Volume lives on the V-Sink; stream stays at unity gain.
-                # Mute still applies per sink-input (channel mute is not sink mute).
-                v_sink_name = f"NativMix_CH_{target_ch}"
-                try:
-                    v_sink = pulse.get_sink_by_name(v_sink_name)
-                except pulsectl.PulseError:
-                    v_sink = None
+            current_sink = self._sink_name_for_stream(pulse, info.index, fallback=info.props.get("sink_name"))
+            default_sink = self._usable_default_sink_name(pulse)
 
-                if not v_sink:
-                    if state.get("v_sink_busy", False):
-                        logger.debug("V-Sink %s being (re)created — reconnect deferred", v_sink_name)
-                    else:
-                        logger.warning("V-Sink %s not found for reconnect", v_sink_name)
+            if vsink_enabled and state.get("v_sink_busy", False):
+                # V-Sink still being created — only apply stream controls if EE holds us.
+                if is_easyeffects_sink(current_sink):
+                    self._apply_stream_volume_mute(pulse, info.index, vol, bool(state.get("muted", False)))
+                return
+
+            if vsink_enabled:
+                try:
+                    pulse.get_sink_by_name(vsink_name)
+                except pulsectl.PulseError:
+                    logger.warning("V-Sink %s not found for reconnect", vsink_name)
+                    if is_easyeffects_sink(current_sink):
+                        self._apply_stream_volume_mute(pulse, info.index, vol, bool(state.get("muted", False)))
                     return
 
-                if info.props.get("sink_name") != v_sink_name:
-                    now = time.monotonic()
-                    last = self._recently_routed.get(info.index)
-                    if last is not None and now - last < 2.0:
-                        logger.debug(
-                            "Routing %s skipped – cooldown active (%.0fms ago)",
-                            info.app_name,
-                            (now - last) * 1000,
+            route_to = resolve_auto_route_target(
+                current_sink=current_sink,
+                vsink_enabled=vsink_enabled,
+                vsink_name=vsink_name,
+                default_sink=default_sink,
+            )
+            if route_to is None and is_easyeffects_sink(current_sink):
+                logger.debug(
+                    "EE hold: leaving %s on %s (vol/mute still applied on stream)",
+                    info.app_name,
+                    current_sink,
+                )
+            if route_to is not None:
+                now = time.monotonic()
+                last = self._recently_routed.get(info.index)
+                if last is not None and now - last < 2.0:
+                    logger.debug(
+                        "Routing %s skipped – cooldown active (%.0fms ago)",
+                        info.app_name,
+                        (now - last) * 1000,
+                    )
+                else:
+                    self._recently_routed = {k: v for k, v in self._recently_routed.items() if now - v < 10.0}
+                    self._recently_routed[info.index] = now
+                    logger.debug(
+                        "Routing %s → %s (was %s, vsink=%s)",
+                        info.app_name,
+                        route_to,
+                        current_sink,
+                        vsink_enabled,
+                    )
+                    try:
+                        subprocess.run(
+                            ["pactl", "move-sink-input", str(info.index), route_to],
+                            capture_output=True,
+                            timeout=_SUBPROCESS_TIMEOUT,
                         )
-                    else:
-                        # Prune stale entries (> 10 s) to keep the dict small
-                        self._recently_routed = {k: v for k, v in self._recently_routed.items() if now - v < 10.0}
-                        self._recently_routed[info.index] = now
-                        logger.debug("Routing %s into V-Sink %s", info.app_name, v_sink_name)
-                        # Use pactl as it is more robust for moving streams across backends
-                        try:
-                            subprocess.run(
-                                ["pactl", "move-sink-input", str(info.index), v_sink_name],
-                                capture_output=True,
-                                timeout=_SUBPROCESS_TIMEOUT,
-                            )
-                        except subprocess.TimeoutExpired:
-                            logger.warning(
-                                "pactl move-sink-input timed out after %ds (stream %d -> %s)",
-                                _SUBPROCESS_TIMEOUT,
-                                info.index,
-                                v_sink_name,
-                            )
+                    except subprocess.TimeoutExpired:
+                        logger.warning(
+                            "pactl move-sink-input timed out after %ds (stream %d -> %s)",
+                            _SUBPROCESS_TIMEOUT,
+                            info.index,
+                            route_to,
+                        )
+                    current_sink = self._sink_name_for_stream(pulse, info.index, fallback=route_to)
 
-                # Keep stream at unity and channel level on the V-Sink only when the
-                # stream is actually on that sink (avoids blasting 100% on the old sink).
-                try:
-                    si_fresh = pulse.sink_input_info(info.index)
-                    if si_fresh and not isinstance(si_fresh, int) and si_fresh.sink == v_sink.index:
+            # Volume: EE-held or non-V-Sink → stream; on V-Sink → null-sink + unity stream.
+            mode = volume_apply_mode(
+                current_sink=current_sink,
+                vsink_enabled=vsink_enabled,
+                vsink_name=vsink_name,
+            )
+            try:
+                si_fresh = pulse.sink_input_info(info.index)
+                if si_fresh and not isinstance(si_fresh, int):
+                    if mode == "vsink":
                         pulse.volume_set_all_chans(si_fresh, 1.0)
-                        pulse.volume_set_all_chans(v_sink, vol)
-                    elif si_fresh is None or isinstance(si_fresh, int):
-                        logger.info(
-                            "Received status ID (%s) instead of metadata object for %s, skipping volume sync",
-                            si_fresh,
-                            info.app_name,
-                        )
-                except (pulsectl.PulseError, TypeError, ValueError) as e:
-                    logger.debug("Minor: Could not sync V-Sink volumes for %s: %s", info.app_name, e)
-            else:
-                try:
-                    si_fresh = pulse.sink_input_info(info.index)
-                    if si_fresh and not isinstance(si_fresh, int):
-                        pulse.volume_set_all_chans(si_fresh, vol)
+                        try:
+                            v_sink = pulse.get_sink_by_name(vsink_name)
+                            pulse.volume_set_all_chans(v_sink, vol)
+                        except pulsectl.PulseError:
+                            pass
                     else:
-                        logger.info(
-                            "Received status ID (%s) instead of metadata object for %s, skipping volume sync",
-                            si_fresh,
-                            info.app_name,
-                        )
-                except (pulsectl.PulseError, TypeError, ValueError) as e:
-                    logger.debug("Minor: Could not apply volume (stream may have closed): %s", e)
+                        pulse.volume_set_all_chans(si_fresh, vol)
+                elif si_fresh is None or isinstance(si_fresh, int):
+                    logger.info(
+                        "Received status ID (%s) instead of metadata object for %s, skipping volume sync",
+                        si_fresh,
+                        info.app_name,
+                    )
+            except (pulsectl.PulseError, TypeError, ValueError) as e:
+                logger.debug("Minor: Could not sync volumes for %s: %s", info.app_name, e)
 
-            # Channel mute is applied by _apply_post_reflex_mute on first appear,
-            # and again here for late identity resolves (dedupe allows app_name change).
-            # Still needed with V-Sink: mute is per stream today, not on the null-sink.
             desired_mute = bool(state.get("muted", False))
             try:
                 pulse.sink_input_mute(info.index, mute=desired_mute)
@@ -500,6 +520,57 @@ class _AudioListenerThread(QThread):
                 logger.debug("Could not apply channel mute on reconnect for %s: %s", info.app_name, e)
         except Exception as e:
             logger.error("Auto-reconnect process error for %s: %s", info.app_name, e)
+
+    @staticmethod
+    def _sink_name_for_stream(
+        pulse: pulsectl.Pulse,
+        stream_index: int,
+        fallback: str | None = None,
+    ) -> str | None:
+        """Resolve the sink name a sink-input is currently connected to."""
+        try:
+            si = pulse.sink_input_info(stream_index)
+            if si is None or isinstance(si, int):
+                return fallback
+            for sink in pulse.sink_list():
+                if sink.index == si.sink:
+                    return sink.name
+        except pulsectl.PulseError:
+            pass
+        return fallback
+
+    @staticmethod
+    def _usable_default_sink_name(pulse: pulsectl.Pulse) -> str | None:
+        """Default sink for reclaim, never another NativMix_* virtual sink."""
+        try:
+            name = pulse.server_info().default_sink_name
+        except pulsectl.PulseError:
+            return None
+        if name and not name.startswith("NativMix_"):
+            return name
+        try:
+            for sink in pulse.sink_list():
+                if not sink.name.startswith("NativMix_") and "dummy" not in sink.name.lower():
+                    if not is_easyeffects_sink(sink.name):
+                        return sink.name
+        except pulsectl.PulseError:
+            pass
+        return None
+
+    @staticmethod
+    def _apply_stream_volume_mute(
+        pulse: pulsectl.Pulse,
+        stream_index: int,
+        volume: float,
+        muted: bool,
+    ) -> None:
+        try:
+            si = pulse.sink_input_info(stream_index)
+            if si and not isinstance(si, int):
+                pulse.volume_set_all_chans(si, volume)
+            pulse.sink_input_mute(stream_index, mute=muted)
+        except pulsectl.PulseError as e:
+            logger.debug("Could not apply stream volume/mute on %d: %s", stream_index, e)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -1259,19 +1330,32 @@ class PipeWireManager(AudioBackendBase):
             except pulsectl.PulseError as exc:
                 logger.error("Failed to evacuate removed apps from V-Sink %s: %s", sink_name, exc)
 
-        # Handle explicitly added apps: if V-Sink is on, route them into it
-        if v_sink_enabled and added:
+        # Handle explicitly added apps: route to V-Sink or default unless EE holds them
+        if added:
             try:
                 with pulsectl.Pulse("nativmix-route-added") as pulse:
-                    try:
-                        target_sink = pulse.get_sink_by_name(sink_name)
-                    except pulsectl.PulseError:
-                        target_sink = None
+                    sink_by_index = {s.index: s.name for s in pulse.sink_list()}
+                    default_name = _AudioListenerThread._usable_default_sink_name(pulse)
+                    target_name = sink_name if v_sink_enabled else default_name
+                    target_sink = None
+                    if target_name:
+                        try:
+                            target_sink = pulse.get_sink_by_name(target_name)
+                        except pulsectl.PulseError:
+                            target_sink = None
 
                     if target_sink:
                         for si in pulse.sink_input_list():
+                            current_name = sink_by_index.get(si.sink)
+                            if is_easyeffects_sink(current_name):
+                                logger.debug(
+                                    "EE hold: not routing added app stream %d from %s",
+                                    si.index,
+                                    current_name,
+                                )
+                                continue
                             if si.sink == target_sink.index:
-                                continue  # Already in the V-Sink
+                                continue
                             props = dict(si.proplist)
                             pid_str = props.get("application.process.id", "0")
                             try:
@@ -1283,10 +1367,11 @@ class PipeWireManager(AudioBackendBase):
                                 continue
 
                             logger.debug(
-                                "App '%s' added to CH%d – routing into V-Sink '%s'", resolved, channel_index, sink_name
+                                "App '%s' added to CH%d – routing into '%s'",
+                                resolved,
+                                channel_index,
+                                target_sink.name,
                             )
-                            # Move via pactl first, then set Unity Gain.
-                            # Setting volume before the move would affect the old sink.
                             try:
                                 result = subprocess.run(
                                     ["pactl", "move-sink-input", str(si.index), str(target_sink.index)],
@@ -1295,7 +1380,7 @@ class PipeWireManager(AudioBackendBase):
                                 )
                                 if result.returncode != 0:
                                     logger.warning(
-                                        "pactl move-sink-input to V-Sink failed (rc=%d): %s",
+                                        "pactl move-sink-input failed (rc=%d): %s",
                                         result.returncode,
                                         result.stderr.decode(errors="replace").strip(),
                                     )
@@ -1306,21 +1391,24 @@ class PipeWireManager(AudioBackendBase):
                                     si.index,
                                 )
 
-                            # Apply unity gain AFTER the stream is on the V-Sink
-                            try:
-                                si_fresh = next((s for s in pulse.sink_input_list() if s.index == si.index), None)
-                                if si_fresh is not None:
-                                    pulse.volume_set_all_chans(si_fresh, 1.0)
-                            except pulsectl.PulseError:
-                                pass
+                            if v_sink_enabled:
+                                try:
+                                    si_fresh = next(
+                                        (s for s in pulse.sink_input_list() if s.index == si.index),
+                                        None,
+                                    )
+                                    if si_fresh is not None:
+                                        pulse.volume_set_all_chans(si_fresh, 1.0)
+                                except pulsectl.PulseError:
+                                    pass
             except pulsectl.PulseError as exc:
-                logger.error("Failed to route added apps into V-Sink %s: %s", sink_name, exc)
+                logger.error("Failed to route added apps for CH%d: %s", channel_index, exc)
 
         # Volume ownership: with V-Sink, gain lives on the null-sink and streams
-        # stay at unity. Applying stream volume here as well double-attenuates
-        # (stream × sink) and makes routed apps sound quieter than direct routing.
+        # stay at unity — except EE-held streams, which keep stream gain.
         if v_sink_enabled:
             self._set_v_sink_volume(channel_index, current_volume)
+            self._apply_ee_held_stream_volumes(channel_index, current_volume)
             for name in app_names:
                 self._apply_mute_by_name(name, current_muted)
         else:
@@ -1335,16 +1423,20 @@ class PipeWireManager(AudioBackendBase):
     def _sync_v_sink_routing(self) -> None:
         """
         Scan all active sink_inputs.
-        If an app is in an active V-Sink channel, ensure it is routed there.
-        If an app is in a V-Sink but no longer mapped to a V-Sink channel, evacuate it to default.
+        Mapped apps go to V-Sink or default sink unless Easy Effects currently holds them.
+        Streams stuck in a V-Sink they no longer belong to are evacuated to default.
         """
         try:
             with pulsectl.Pulse("nativmix-vsink-sync") as pulse:
-                default_sink_name = pulse.server_info().default_sink_name
+                default_sink_name = _AudioListenerThread._usable_default_sink_name(pulse)
                 try:
-                    default_sink = pulse.get_sink_by_name(default_sink_name)
+                    default_sink = pulse.get_sink_by_name(default_sink_name) if default_sink_name else None
                 except pulsectl.PulseError:
+                    default_sink = None
+                if default_sink is None:
                     return
+
+                sink_by_index = {s.index: s.name for s in pulse.sink_list()}
 
                 # Map of configured V-Sink channels to their sink index (if they exist)
                 v_sinks: dict[int, int] = {}
@@ -1363,6 +1455,9 @@ class PipeWireManager(AudioBackendBase):
                     props = dict(si.proplist)
                     if _is_internal_stream(props):
                         continue
+                    current_name = sink_by_index.get(si.sink)
+                    if is_easyeffects_sink(current_name):
+                        continue
                     pid_str = props.get("application.process.id", "0")
                     try:
                         pid = int(pid_str)
@@ -1380,15 +1475,31 @@ class PipeWireManager(AudioBackendBase):
                         target_sink_index = v_sinks[target_ch]
                         if si.sink != target_sink_index:
                             logger.debug("Routing %s (idx: %d) into V-Sink CH_%d", resolved, si.index, target_ch)
-                            # Move then unmute (PipeWire may cork during move)
                             self._seamless_move(pulse, si.index, target_sink_index, volume=1.0)
 
                     # Case B: App is in a V-Sink but shouldn't be
                     elif si.sink in active_v_sink_indices:
-                        # Unmapped or mapped to a non-vsink channel → evacuate to default sink
                         logger.debug("Evacuating %s (idx: %d) out of V-Sink to Default", resolved, si.index)
                         vol = self._poti_volumes.get(target_ch, 0.5) if target_ch is not None else 0.5
                         self._seamless_move(pulse, si.index, default_sink.index, volume=vol)
+
+                    # Case C: Mapped app without V-Sink → default sink
+                    elif target_ch is not None:
+                        route = resolve_auto_route_target(
+                            current_sink=current_name,
+                            vsink_enabled=False,
+                            vsink_name=f"NativMix_CH_{target_ch}",
+                            default_sink=default_sink.name,
+                        )
+                        if route is not None:
+                            logger.debug(
+                                "Routing %s (idx: %d) to default sink %s",
+                                resolved,
+                                si.index,
+                                default_sink.name,
+                            )
+                            vol = self._poti_volumes.get(target_ch, 0.5)
+                            self._seamless_move(pulse, si.index, default_sink.index, volume=vol)
 
         except pulsectl.PulseError as exc:
             logger.error("V-Sink Routing Sync failed: %s", exc)
@@ -1433,6 +1544,7 @@ class PipeWireManager(AudioBackendBase):
                     if self._config.is_v_sink_enabled(channel):
                         if self._should_apply_volume("vsink", str(channel), volume):
                             self._set_v_sink_volume(channel, volume, pulse=shared_pulse)
+                        self._apply_ee_held_stream_volumes(channel, volume, pulse=shared_pulse)
                     else:
                         app_names = self._config.get_app_names(channel)
                         for name in app_names:
@@ -1493,6 +1605,7 @@ class PipeWireManager(AudioBackendBase):
                     if self._config.is_v_sink_enabled(channel):
                         if self._should_apply_volume("vsink", str(channel), volume):
                             self._set_v_sink_volume(channel, volume, pulse=shared_pulse)
+                        self._apply_ee_held_stream_volumes(channel, volume, pulse=shared_pulse)
                     else:
                         app_names = self._config.get_app_names(channel)
                         for name in app_names:
@@ -1536,6 +1649,7 @@ class PipeWireManager(AudioBackendBase):
             if self._config.is_v_sink_enabled(channel_index):
                 if self._should_apply_volume("vsink", str(channel_index), volume):
                     self._set_v_sink_volume(channel_index, volume)  # Slider can open its own connection
+                self._apply_ee_held_stream_volumes(channel_index, volume)
             else:
                 app_names = self._config.get_app_names(channel_index)
                 for name in app_names:
@@ -1567,6 +1681,47 @@ class PipeWireManager(AudioBackendBase):
                     _do_apply(p)
         except pulsectl.PulseError as exc:
             logger.error("Failed to apply V-Sink volume for CH %d: %s", channel_index, exc)
+
+    def _apply_ee_held_stream_volumes(
+        self,
+        channel_index: int,
+        volume: float,
+        pulse: pulsectl.Pulse | None = None,
+    ) -> None:
+        """Apply fader volume to this channel's streams that currently sit on Easy Effects."""
+        target_ch_apps = {n.lower() for n in self._config.get_app_names(channel_index)}
+        if not target_ch_apps:
+            return
+        assigned = self._get_all_assigned_apps()
+        other_apps = "other apps" in target_ch_apps
+
+        def _do_apply(p: pulsectl.Pulse) -> None:
+            sink_names = {s.index: s.name for s in p.sink_list()}
+            for si in p.sink_input_list():
+                props = dict(si.proplist)
+                if _is_internal_stream(props):
+                    continue
+                if not is_easyeffects_sink(sink_names.get(si.sink)):
+                    continue
+                pid_str = props.get("application.process.id", "0")
+                try:
+                    pid = int(pid_str)
+                except ValueError:
+                    pid = 0
+                resolved = resolve_app_name(pid, fallback=_pa_name_fallback(props)).lower()
+                if resolved in target_ch_apps or (
+                    other_apps and resolved not in assigned and resolved != "system master"
+                ):
+                    p.volume_set_all_chans(si, volume)
+
+        try:
+            if pulse is not None:
+                _do_apply(pulse)
+            else:
+                with pulsectl.Pulse("nativmix-ee-held-vol") as p:
+                    _do_apply(p)
+        except pulsectl.PulseError as exc:
+            logger.debug("EE-held stream volume apply failed for CH%d: %s", channel_index, exc)
 
     def _seamless_move(
         self,
