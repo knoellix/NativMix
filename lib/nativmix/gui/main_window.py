@@ -78,6 +78,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _STRIP_DROP_ANIM_MS = 220
+_STRIP_LIVE_ANIM_MS = 140
 
 
 def _format_midi_binding_label(prefix: str, midi_ch: int, cc: int | None, empty: str) -> str:
@@ -1320,6 +1321,12 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("nativmix", "GUI")
         self._reorder_anim: QParallelAnimationGroup | None = None
         self._reorder_animating = False
+        self._live_anim: QParallelAnimationGroup | None = None
+        self._drag_home: dict[ChannelWidget, QRect] = {}
+        self._drag_home_order: list[ChannelWidget] = []
+        self._drag_source: ChannelWidget | None = None
+        self._live_insert_at: int | None = None
+        self._layout_detached = False
 
         # Guard: set True while a show() is in flight to suppress spurious hide.
         self._show_requested: bool = False
@@ -1534,6 +1541,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _rebuild_channels(self) -> None:
+        self._stop_live_anim()
+        if self._reorder_anim is not None:
+            self._reorder_anim.stop()
+            self._reorder_anim.deleteLater()
+            self._reorder_anim = None
+        self._reorder_animating = False
+        self._clear_live_reorder_state()
+        self._layout_detached = False
         # Layout Batching: Disable layout updates during population
         self._ch_layout.setEnabled(False)
         try:
@@ -1562,7 +1577,7 @@ class MainWindow(QMainWindow):
                 w = ChannelWidget(i, self._config, self._backend, is_midi=is_midi)
                 w.strip_drop.connect(self._on_strip_drop)
                 w.reorder_tracking.connect(self._on_reorder_tracking)
-                w.reorder_active_changed.connect(self._on_reorder_active_changed)
+                w.reorder_active_changed.connect(lambda active, ww=w: self._on_reorder_session(active, ww))
                 self._channels.append(w)
                 # Ensure MIDI-relevant signals are connected even after rebuild
                 if w.is_midi_channel and self._midi:
@@ -1593,66 +1608,180 @@ class MainWindow(QMainWindow):
     def _clear_drop_hints(self) -> None:
         self._drop_gap.hide()
 
-    def _style_drop_gap(self) -> None:
-        accent = self.palette().color(QPalette.ColorRole.Highlight)
-        self._drop_gap.setAutoFillBackground(True)
-        pal = self._drop_gap.palette()
-        pal.setColor(QPalette.ColorRole.Window, accent)
-        self._drop_gap.setPalette(pal)
+    def _detach_channel_layout(self) -> None:
+        """Take strips out of QHBoxLayout so geometries can be animated."""
+        if self._layout_detached:
+            return
+        while self._ch_layout.count():
+            item = self._ch_layout.takeAt(0)
+            del item
+        for w in self._channels:
+            w.setParent(self._ch_container)
+            w.show()
+        self._layout_detached = True
+
+    def _reattach_channel_layout(self, widgets: list[ChannelWidget] | None = None) -> None:
+        """Put strips back into left-to-right layout order."""
+        if widgets is None:
+            widgets = list(self._channels)
+        while self._ch_layout.count():
+            item = self._ch_layout.takeAt(0)
+            del item
+        for w in widgets:
+            self._ch_layout.addWidget(w)
+            w.set_drag_blocked(False)
+        self._ch_layout.addStretch()
+        self._layout_detached = False
+
+    def _stop_live_anim(self) -> None:
+        if self._live_anim is not None:
+            self._live_anim.stop()
+            self._live_anim.deleteLater()
+            self._live_anim = None
+
+    def _clear_live_reorder_state(self) -> None:
+        self._drag_home = {}
+        self._drag_home_order = []
+        self._drag_source = None
+        self._live_insert_at = None
 
     def _insert_index_at(self, global_pos: QPoint) -> int | None:
-        """Visual insert slot 0..n from pointer x (gap between strip midpoints)."""
-        if not self._channels:
+        """Visual insert slot 0..n from pointer x (uses home rects while live-dragging)."""
+        widgets = self._drag_home_order or self._channels
+        if not widgets:
             return None
         local_x = self._ch_container.mapFromGlobal(global_pos).x()
-        for i, widget in enumerate(self._channels):
-            if local_x < widget.geometry().center().x():
+        for i, widget in enumerate(widgets):
+            geo = self._drag_home.get(widget, widget.geometry())
+            if local_x < geo.center().x():
                 return i
-        return len(self._channels)
+        return len(widgets)
 
-    def _show_gap_indicator(self, insert_at: int) -> None:
-        """Place the drop line in the spacing between strips (or ends of the row)."""
-        if not self._channels:
-            self._drop_gap.hide()
-            return
-        self._style_drop_gap()
+    def _live_preview_targets(self, insert_at: int) -> dict[ChannelWidget, QRect]:
+        """Packed row with a source-sized hole at *insert_at* (home-order coordinates)."""
+        source = self._drag_source
+        if source is None or not self._drag_home_order:
+            return {}
+        others = [w for w in self._drag_home_order if w is not source]
+        src_i = self._drag_home_order.index(source)
+        adj = insert_at
+        if src_i < adj:
+            adj -= 1
+        adj = max(0, min(adj, len(others)))
         spacing = self._ch_layout.spacing()
-        if insert_at <= 0:
-            x = self._channels[0].geometry().left() - max(spacing // 2, 2) - 1
-        elif insert_at >= len(self._channels):
-            x = self._channels[-1].geometry().right() + max(spacing // 2, 2) - 1
-        else:
-            left = self._channels[insert_at - 1].geometry().right()
-            right = self._channels[insert_at].geometry().left()
-            x = (left + right) // 2 - 1
-        height = max(self._ch_container.height(), self._channels[0].height())
-        self._drop_gap.setGeometry(max(0, x), 0, 3, height)
-        self._drop_gap.show()
-        self._drop_gap.raise_()
+        src_home = self._drag_home[source]
+        gap_w = src_home.width() + spacing
+        x = 0
+        targets: dict[ChannelWidget, QRect] = {}
+        placed_source = False
+        for i, w in enumerate(others):
+            if i == adj:
+                targets[source] = QRect(x, src_home.y(), src_home.width(), src_home.height())
+                x += gap_w
+                placed_source = True
+            home = self._drag_home[w]
+            targets[w] = QRect(x, home.y(), home.width(), home.height())
+            x += home.width() + spacing
+        if not placed_source:
+            targets[source] = QRect(x, src_home.y(), src_home.width(), src_home.height())
+        return targets
 
-    def _on_reorder_active_changed(self, active: bool) -> None:
-        if not active:
-            self._clear_drop_hints()
+    def _animate_geometries(
+        self,
+        targets: dict[ChannelWidget, QRect],
+        duration: int,
+        on_finished: object | None = None,
+        *,
+        live: bool = False,
+    ) -> None:
+        """Animate widgets to *targets*. *live* uses the live-gap animation slot."""
+        if live:
+            self._stop_live_anim()
+        else:
+            if self._reorder_anim is not None:
+                self._reorder_anim.stop()
+                self._reorder_anim.deleteLater()
+                self._reorder_anim = None
+
+        group = QParallelAnimationGroup(self)
+        for w, end in targets.items():
+            start = QRect(w.geometry())
+            if start == end:
+                continue
+            anim = QPropertyAnimation(w, b"geometry", group)
+            anim.setDuration(duration)
+            anim.setStartValue(start)
+            anim.setEndValue(end)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            group.addAnimation(anim)
+
+        if group.animationCount() == 0:
+            if on_finished is not None:
+                on_finished()
+            return
+
+        if on_finished is not None:
+            group.finished.connect(on_finished)
+        if live:
+            self._live_anim = group
+        else:
+            self._reorder_anim = group
+        group.start(QAbstractAnimation.DeletionPolicy.KeepWhenStopped)
+
+    def _on_reorder_session(self, active: bool, source: ChannelWidget) -> None:
+        """Begin/end a live-gap reorder; drop animation takes over if already running."""
+        if active:
+            if self._reorder_animating or self._drag_source is not None:
+                return
+            self._drag_source = source
+            self._drag_home_order = list(self._channels)
+            self._drag_home = {w: QRect(w.geometry()) for w in self._channels}
+            self._live_insert_at = None
+            self._detach_channel_layout()
+            source.raise_()
+            return
+        self._clear_drop_hints()
+        if self._reorder_animating:
+            return
+        # Drag cancelled or dropped in the original slot — slide home, then reattach.
+        if self._drag_home:
+            homes = dict(self._drag_home)
+            order = list(self._drag_home_order)
+
+            def _restore() -> None:
+                self._channels = order
+                self._reattach_channel_layout(order)
+                self._clear_live_reorder_state()
+
+            self._animate_geometries(homes, _STRIP_LIVE_ANIM_MS, _restore, live=True)
+        elif self._layout_detached:
+            self._reattach_channel_layout()
+            self._clear_live_reorder_state()
 
     def _on_reorder_tracking(self, global_pos: QPoint) -> None:
-        """Show insert gap under the cursor while dragging a strip."""
+        """Open a live insert gap by sliding neighbours as the pointer moves."""
+        if self._drag_source is None or self._reorder_animating:
+            return
         insert_at = self._insert_index_at(global_pos)
         if insert_at is None:
-            self._clear_drop_hints()
             return
-        self._show_gap_indicator(insert_at)
+        if insert_at == self._live_insert_at:
+            return
+        self._live_insert_at = insert_at
+        targets = self._live_preview_targets(insert_at)
+        if targets:
+            self._animate_geometries(targets, _STRIP_LIVE_ANIM_MS, live=True)
 
     def _on_strip_drop(self, source_id: int, global_pos: QPoint) -> None:
         self._clear_drop_hints()
         if self._reorder_animating:
             return
-        visual = [w.channel_index for w in self._channels]
+        visual = [w.channel_index for w in (self._drag_home_order or self._channels)]
         if source_id not in visual:
             return
         insert_at = self._insert_index_at(global_pos)
         if insert_at is None:
             return
-        # Adjust if removing source shifts slots to the right of it.
         src_visual = visual.index(source_id)
         if src_visual < insert_at:
             insert_at -= 1
@@ -1660,7 +1789,6 @@ class MainWindow(QMainWindow):
         insert_at = max(0, min(insert_at, len(visual)))
         visual.insert(insert_at, source_id)
 
-        # Keep any non-visible channel ids (e.g. MIDI hidden in USB mode) stable at end.
         full = self._config.get_channel_order()
         hidden = [cid for cid in full if cid not in visual]
         new_order = visual + hidden
@@ -1669,32 +1797,24 @@ class MainWindow(QMainWindow):
         self._config.set_channel_order(new_order)
         if self._profile_manager is not None:
             self._profile_manager.save_current(self._config.all_channels(), self._config.get_channel_order())
+        self._stop_live_anim()
         self._animate_channel_reorder(visual)
 
     def _animate_channel_reorder(self, visual_ids: list[int]) -> None:
         """Slide existing strips to their new row positions, then reattach to the layout."""
-        by_id = {w.channel_index: w for w in self._channels}
+        by_id = {w.channel_index: w for w in (self._drag_home_order or self._channels)}
         widgets = [by_id[cid] for cid in visual_ids if cid in by_id]
         if len(widgets) < 2:
+            self._clear_live_reorder_state()
             self._rebuild_channels()
             return
-
-        if self._reorder_anim is not None:
-            self._reorder_anim.stop()
-            self._reorder_anim.deleteLater()
-            self._reorder_anim = None
 
         for w in widgets:
             w.setGraphicsEffect(None)
 
+        self._detach_channel_layout()
         starts = {w: QRect(w.geometry()) for w in widgets}
         spacing = self._ch_layout.spacing()
-
-        # Detach from layout management so we can animate absolute geometries.
-        while self._ch_layout.count():
-            item = self._ch_layout.takeAt(0)
-            del item
-
         x = 0
         targets: dict[ChannelWidget, QRect] = {}
         for w in widgets:
@@ -1702,7 +1822,6 @@ class MainWindow(QMainWindow):
             targets[w] = QRect(x, start.y(), start.width(), start.height())
             x += start.width() + spacing
             w.setParent(self._ch_container)
-            w.setGeometry(start)
             w.show()
 
         self._channels = widgets
@@ -1710,29 +1829,13 @@ class MainWindow(QMainWindow):
         for w in widgets:
             w.set_drag_blocked(True)
 
-        group = QParallelAnimationGroup(self)
-        for w in widgets:
-            anim = QPropertyAnimation(w, b"geometry", group)
-            anim.setDuration(_STRIP_DROP_ANIM_MS)
-            anim.setStartValue(starts[w])
-            anim.setEndValue(targets[w])
-            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-            group.addAnimation(anim)
-
         def _finish() -> None:
             self._reorder_animating = False
             self._reorder_anim = None
-            while self._ch_layout.count():
-                item = self._ch_layout.takeAt(0)
-                del item
-            for w in widgets:
-                self._ch_layout.addWidget(w)
-                w.set_drag_blocked(False)
-            self._ch_layout.addStretch()
+            self._reattach_channel_layout(widgets)
+            self._clear_live_reorder_state()
 
-        group.finished.connect(_finish)
-        self._reorder_anim = group
-        group.start(QAbstractAnimation.DeletionPolicy.KeepWhenStopped)
+        self._animate_geometries(targets, _STRIP_DROP_ANIM_MS, _finish, live=False)
 
     def finalize_ui(self) -> None:
         """Called once hardware/audio audit is complete to enable rendering."""
