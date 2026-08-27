@@ -24,7 +24,21 @@ import logging
 import os
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, QPoint, QSettings, QSize, Qt, QTimer, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
+    QEvent,
+    QParallelAnimationGroup,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    QSettings,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal,
+    pyqtSlot,
+)
 from PyQt6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QPainter, QPalette, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
@@ -62,6 +76,8 @@ if TYPE_CHECKING:
     from nativmix.utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
+
+_STRIP_DROP_ANIM_MS = 220
 
 
 def _format_midi_binding_label(prefix: str, midi_ch: int, cc: int | None, empty: str) -> str:
@@ -435,6 +451,7 @@ class ChannelWidget(QFrame):
         self._backend = backend
         self.is_midi_channel = is_midi
         self._compact = False
+        self._drag_blocked = False
         logger.debug("Creating ChannelWidget: index=%d, is_midi=%s", channel_index, is_midi)
 
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -789,8 +806,13 @@ class ChannelWidget(QFrame):
             self._mute_learn_btn.setVisible(False)
             self._remove_midi_btn.setVisible(False)
 
+    def set_drag_blocked(self, blocked: bool) -> None:
+        """Temporarily disable strip reorder grips (e.g. during drop animation)."""
+        self._drag_blocked = blocked
+        self._update_drag_handle_cursor()
+
     def _update_drag_handle_cursor(self) -> None:
-        enabled = not self._compact
+        enabled = not self._compact and not self._drag_blocked
         self._ch_label.set_reorder_enabled(enabled)
         self._sep.set_reorder_enabled(enabled)
 
@@ -1296,6 +1318,8 @@ class MainWindow(QMainWindow):
         self._channels: list[ChannelWidget] = []
         self._last_mode = self._config.input_mode
         self.settings = QSettings("nativmix", "GUI")
+        self._reorder_anim: QParallelAnimationGroup | None = None
+        self._reorder_animating = False
 
         # Guard: set True while a show() is in flight to suppress spurious hide.
         self._show_requested: bool = False
@@ -1620,6 +1644,8 @@ class MainWindow(QMainWindow):
 
     def _on_strip_drop(self, source_id: int, global_pos: QPoint) -> None:
         self._clear_drop_hints()
+        if self._reorder_animating:
+            return
         visual = [w.channel_index for w in self._channels]
         if source_id not in visual:
             return
@@ -1643,7 +1669,70 @@ class MainWindow(QMainWindow):
         self._config.set_channel_order(new_order)
         if self._profile_manager is not None:
             self._profile_manager.save_current(self._config.all_channels(), self._config.get_channel_order())
-        self._rebuild_channels()
+        self._animate_channel_reorder(visual)
+
+    def _animate_channel_reorder(self, visual_ids: list[int]) -> None:
+        """Slide existing strips to their new row positions, then reattach to the layout."""
+        by_id = {w.channel_index: w for w in self._channels}
+        widgets = [by_id[cid] for cid in visual_ids if cid in by_id]
+        if len(widgets) < 2:
+            self._rebuild_channels()
+            return
+
+        if self._reorder_anim is not None:
+            self._reorder_anim.stop()
+            self._reorder_anim.deleteLater()
+            self._reorder_anim = None
+
+        for w in widgets:
+            w.setGraphicsEffect(None)
+
+        starts = {w: QRect(w.geometry()) for w in widgets}
+        spacing = self._ch_layout.spacing()
+
+        # Detach from layout management so we can animate absolute geometries.
+        while self._ch_layout.count():
+            item = self._ch_layout.takeAt(0)
+            del item
+
+        x = 0
+        targets: dict[ChannelWidget, QRect] = {}
+        for w in widgets:
+            start = starts[w]
+            targets[w] = QRect(x, start.y(), start.width(), start.height())
+            x += start.width() + spacing
+            w.setParent(self._ch_container)
+            w.setGeometry(start)
+            w.show()
+
+        self._channels = widgets
+        self._reorder_animating = True
+        for w in widgets:
+            w.set_drag_blocked(True)
+
+        group = QParallelAnimationGroup(self)
+        for w in widgets:
+            anim = QPropertyAnimation(w, b"geometry", group)
+            anim.setDuration(_STRIP_DROP_ANIM_MS)
+            anim.setStartValue(starts[w])
+            anim.setEndValue(targets[w])
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            group.addAnimation(anim)
+
+        def _finish() -> None:
+            self._reorder_animating = False
+            self._reorder_anim = None
+            while self._ch_layout.count():
+                item = self._ch_layout.takeAt(0)
+                del item
+            for w in widgets:
+                self._ch_layout.addWidget(w)
+                w.set_drag_blocked(False)
+            self._ch_layout.addStretch()
+
+        group.finished.connect(_finish)
+        self._reorder_anim = group
+        group.start(QAbstractAnimation.DeletionPolicy.KeepWhenStopped)
 
     def finalize_ui(self) -> None:
         """Called once hardware/audio audit is complete to enable rendering."""
