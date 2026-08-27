@@ -17,5 +17,4 @@
     <param name="url">https://pypi.io/packages/source/m/mido/mido-1.3.2.tar.gz</param>
     <param name="filename">mido.tar.gz.bundle</param>
   </service>
-  <service name="appimage"/>
 </services>
