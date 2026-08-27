@@ -145,8 +145,10 @@ fi
 %doc README.md
 
 %changelog
-* Wed Aug 26 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.19-1
+* Thu Aug 27 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.19-1
 - Feat: drag-and-drop reorder of channel strips (profile channel_order, #28)
+- Feat: Easy Effects coexistence — leave streams on EE sinks; volume/mute still apply
+- Feat: per-app routing pause via right-click (routing_paused_apps in profile)
 - Fix: V-Sink no longer double-applies fader volume on stream and null-sink
 * Wed Aug 19 2026 Christian Möllmann <moellix@knoellix.net> - 1.0.18-1
 - Flatpak: stabilize theming baseline by using a controlled light/dark fallback path in sandboxed runtime

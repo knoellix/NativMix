@@ -1,9 +1,11 @@
 nativmix (1.0.19) unstable; urgency=medium
 
   * Feat: drag-and-drop reorder of channel strips (profile channel_order, #28)
+  * Feat: Easy Effects coexistence — leave streams on EE sinks; volume/mute still apply
+  * Feat: per-app routing pause via right-click (routing_paused_apps in profile)
   * Fix: V-Sink no longer double-applies fader volume on stream and null-sink
 
- -- Christian Möllmann <moellix@knoellix.net>  Wed, 26 Aug 2026 16:40:00 +0200
+ -- Christian Möllmann <moellix@knoellix.net>  Thu, 27 Aug 2026 09:25:00 +0200
 
 nativmix (1.0.18) unstable; urgency=medium
 
