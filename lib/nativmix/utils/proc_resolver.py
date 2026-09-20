@@ -40,96 +40,101 @@ logger = logging.getLogger(__name__)
 #: Maps known --user-data-dir path fragments to human-readable app names.
 #: Keys are lowercase substrings; first match wins.
 _USER_DATA_DIR_MAP: dict[str, str] = {
-    "spotify":           "Spotify",
-    "discord":           "Discord",
-    "discordcanary":     "Discord Canary",
-    "discordptb":        "Discord PTB",
-    "chrome":            "Google Chrome",
-    "chromium":          "Chromium",
-    "brave":             "Brave",
-    "vivaldi":           "Vivaldi",
-    "opera":             "Opera",
-    "edge":              "Microsoft Edge",
-    "vscode":            "VS Code",
-    "code":              "VS Code",
-    "slack":             "Slack",
-    "teams":             "Microsoft Teams",
-    "whatsapp":          "WhatsApp",
-    "telegram":          "Telegram",
-    "element":           "Element",
-    "signal":            "Signal",
-    "zoom":              "Zoom",
-    "vesktop":           "Vesktop",
+    "spotify": "Spotify",
+    "discord": "Discord",
+    "discordcanary": "Discord Canary",
+    "discordptb": "Discord PTB",
+    "chrome": "Google Chrome",
+    "chromium": "Chromium",
+    "brave": "Brave",
+    "vivaldi": "Vivaldi",
+    "opera": "Opera",
+    "edge": "Microsoft Edge",
+    "vscode": "VS Code",
+    "code": "VS Code",
+    "slack": "Slack",
+    "teams": "Microsoft Teams",
+    "whatsapp": "WhatsApp",
+    "telegram": "Telegram",
+    "element": "Element",
+    "signal": "Signal",
+    "zoom": "Zoom",
+    "vesktop": "Vesktop",
+    "rekord": "RE-KORD",
+    "re-kord": "RE-KORD",
 }
 
 #: Maps --app-id values (Electron) to human-readable names.
 _APP_ID_MAP: dict[str, str] = {
-    "com.spotify.client":   "Spotify",
+    "com.spotify.client": "Spotify",
     "com.discordapp.Discord": "Discord",
-    "com.microsoft.teams":  "Microsoft Teams",
-    "com.slack.Slack":      "Slack",
-    "com.github.atom":      "Atom",
+    "com.microsoft.teams": "Microsoft Teams",
+    "com.slack.Slack": "Slack",
+    "com.github.atom": "Atom",
+    "com.rekord.app": "RE-KORD",
 }
 
 #: Maps Flatpak application IDs (from .flatpak-info → [Application] name=)
 #: to human-readable names.  Keys are case-insensitive exact matches.
 _FLATPAK_APP_MAP: dict[str, str] = {
-    "com.spotify.client":           "Spotify",
-    "com.discordapp.discord":        "Discord",
-    "com.discordapp.discordcanary":  "Discord Canary",
-    "com.discordapp.discordptb":     "Discord PTB",
-    "com.valvesoftware.steam":       "Steam",
-    "com.slack.slack":               "Slack",
-    "us.zoom.zoom":                  "Zoom",
-    "org.signal.signal":             "Signal",
-    "org.telegram.desktop":          "Telegram",
-    "im.riot.riot":                  "Element",
-    "im.fluffychat.fluffychat":      "FluffyChat",
-    "com.microsoft.teams":           "Microsoft Teams",
-    "com.github.atom":               "Atom",
-    "com.visualstudio.code":         "VS Code",
-    "com.vscodium.codium":           "VSCodium",
-    "com.brave.browser":             "Brave",
-    "org.chromium.chromium":         "Chromium",
-    "com.google.chrome":             "Google Chrome",
-    "org.mozilla.firefox":           "Firefox",
-    "tv.kodi.kodi":                  "Kodi",
-    "io.mpv.mpv":                    "mpv",
-    "org.videolan.vlc":              "VLC",
-    "org.gnome.rhythmbox":           "Rhythmbox",
-    "io.bassi.amberol":              "Amberol",
-    "com.spotify.spotify":           "Spotify",   # alternative bundle ID
-    "dev.vencord.vesktop":           "Vesktop",
+    "com.spotify.client": "Spotify",
+    "com.discordapp.discord": "Discord",
+    "com.discordapp.discordcanary": "Discord Canary",
+    "com.discordapp.discordptb": "Discord PTB",
+    "com.valvesoftware.steam": "Steam",
+    "com.slack.slack": "Slack",
+    "us.zoom.zoom": "Zoom",
+    "org.signal.signal": "Signal",
+    "org.telegram.desktop": "Telegram",
+    "im.riot.riot": "Element",
+    "im.fluffychat.fluffychat": "FluffyChat",
+    "com.microsoft.teams": "Microsoft Teams",
+    "com.github.atom": "Atom",
+    "com.visualstudio.code": "VS Code",
+    "com.vscodium.codium": "VSCodium",
+    "com.brave.browser": "Brave",
+    "org.chromium.chromium": "Chromium",
+    "com.google.chrome": "Google Chrome",
+    "org.mozilla.firefox": "Firefox",
+    "tv.kodi.kodi": "Kodi",
+    "io.mpv.mpv": "mpv",
+    "org.videolan.vlc": "VLC",
+    "org.gnome.rhythmbox": "Rhythmbox",
+    "io.bassi.amberol": "Amberol",
+    "com.spotify.spotify": "Spotify",  # alternative bundle ID
+    "dev.vencord.vesktop": "Vesktop",
 }
 
 #: Maps known binary basenames directly to human-readable names.
 _BINARY_MAP: dict[str, str] = {
-    "spotify":              "Spotify",
-    "spotify-bin":          "Spotify",   # AUR package name
-    "discord":              "Discord",
-    "discordcanary":        "Discord Canary",
-    "discordptb":           "Discord PTB",
-    "slack":                "Slack",
-    "zoom":                 "Zoom",
-    "signal-desktop":       "Signal",
-    "telegram-desktop":     "Telegram",
-    "element-desktop":      "Element",
-    "teams":                "Microsoft Teams",
-    "code":                 "VS Code",
-    "brave":                "Brave Browser",
-    "brave-bin":            "Brave Browser",  # AUR
-    "opera":                "Opera",
-    "vivaldi-stable":       "Vivaldi",
-    "chrome":               "Google Chrome",
+    "spotify": "Spotify",
+    "spotify-bin": "Spotify",  # AUR package name
+    "discord": "Discord",
+    "discordcanary": "Discord Canary",
+    "discordptb": "Discord PTB",
+    "slack": "Slack",
+    "zoom": "Zoom",
+    "signal-desktop": "Signal",
+    "telegram-desktop": "Telegram",
+    "element-desktop": "Element",
+    "teams": "Microsoft Teams",
+    "code": "VS Code",
+    "brave": "Brave Browser",
+    "brave-bin": "Brave Browser",  # AUR
+    "opera": "Opera",
+    "vivaldi-stable": "Vivaldi",
+    "chrome": "Google Chrome",
     "google-chrome-stable": "Google Chrome",
-    "chromium":             "Chromium",
-    "firefox":              "Firefox",
-    "mpv":                  "mpv",
-    "vlc":                  "VLC",
-    "rhythmbox":            "Rhythmbox",
-    "clementine":           "Clementine",
-    "audacious":            "Audacious",
-    "strawberry":           "Strawberry",
+    "chromium": "Chromium",
+    "firefox": "Firefox",
+    "mpv": "mpv",
+    "vlc": "VLC",
+    "rhythmbox": "Rhythmbox",
+    "clementine": "Clementine",
+    "audacious": "Audacious",
+    "strawberry": "Strawberry",
+    "rekord": "RE-KORD",
+    "re-kord": "RE-KORD",
 }
 
 #: PulseAudio/PipeWire stream names that are never the real application name.
@@ -137,36 +142,39 @@ _BINARY_MAP: dict[str, str] = {
 #: the proc_resolver must identify the real app via PID — the PA name alone
 #: is not usable for channel mapping.
 #: NOTE: All entries must be lowercase for case-insensitive comparison.
-GENERIC_PA_NAMES: frozenset[str] = frozenset({
-    # Chromium/Electron renderer process names
-    "chromium",
-    "chrome",
-    "google chrome",
-    # WebRTC generic names (Discord, Meet, Teams, ...)
-    "webrtc voice engine",
-    "webrtc audio device",
-    "audio client",
-    # PipeWire / PulseAudio internal
-    "pipewire",
-    "pipewire-media-session",
-    "pulseaudio",
-    "pulseaudio volume control",
-    "pavucontrol",
-    # Generic virtual/virtual-source names
-    "audio-src",
-    "audio source",
-    "playback",
-    "capture",
-    "sink-input",
-    "output",
-    # Misc unidentifiable
-    "unknown",
-    "",
-})
+GENERIC_PA_NAMES: frozenset[str] = frozenset(
+    {
+        # Chromium/Electron renderer process names
+        "chromium",
+        "chrome",
+        "google chrome",
+        # WebRTC generic names (Discord, Meet, Teams, ...)
+        "webrtc voice engine",
+        "webrtc audio device",
+        "audio client",
+        # PipeWire / PulseAudio internal
+        "pipewire",
+        "pipewire-media-session",
+        "pulseaudio",
+        "pulseaudio volume control",
+        "pavucontrol",
+        # Generic virtual/virtual-source names
+        "audio-src",
+        "audio source",
+        "playback",
+        "capture",
+        "sink-input",
+        "output",
+        # Misc unidentifiable
+        "unknown",
+        "",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # /proc helpers
 # ---------------------------------------------------------------------------
+
 
 def _read_cmdline(pid: int) -> list[str] | None:
     """
@@ -304,7 +312,7 @@ def _read_flatpak_info(pid: int) -> str | None:
             if stripped.startswith("["):  # entered a different section
                 break
             if stripped.lower().startswith(_FLATPAK_NAME_KEY):
-                app_id = stripped[len(_FLATPAK_NAME_KEY):].strip().lower()
+                app_id = stripped[len(_FLATPAK_NAME_KEY) :].strip().lower()
                 logger.debug("Flatpak app ID for pid=%d: %s", pid, app_id)
                 return app_id
 
@@ -314,6 +322,7 @@ def _read_flatpak_info(pid: int) -> str | None:
 # ---------------------------------------------------------------------------
 # Process info provider — platform abstraction layer
 # ---------------------------------------------------------------------------
+
 
 class _LinuxProcProvider:
     """
@@ -356,9 +365,7 @@ class _LinuxProcProvider:
 #: Active process-info provider.
 #: ``None`` on non-Linux platforms — :func:`resolve_app_name` returns *fallback* immediately.
 #: Swap for a ``_WindowsProcProvider`` instance once the Windows backend is ready.
-_proc_provider: _LinuxProcProvider | None = (
-    _LinuxProcProvider() if sys.platform == "linux" else None
-)
+_proc_provider: _LinuxProcProvider | None = _LinuxProcProvider() if sys.platform == "linux" else None
 
 
 def _resolve_flatpak(pid: int) -> str | None:
@@ -389,7 +396,7 @@ def _resolve_flatpak(pid: int) -> str | None:
 # ---------------------------------------------------------------------------
 
 _USER_DATA_DIR_RE = re.compile(r"--user-data-dir=(.+)$")
-_APP_ID_RE        = re.compile(r"--app-id=(.+)$")
+_APP_ID_RE = re.compile(r"--app-id=(.+)$")
 
 
 def _extract_flag(args: list[str], pattern: re.Pattern[str]) -> str | None:
@@ -417,6 +424,7 @@ def _match_user_data_dir(user_data_dir: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Core resolver
 # ---------------------------------------------------------------------------
+
 
 def _resolve_pid(pid: int) -> str | None:
     """
@@ -523,7 +531,9 @@ def resolve_app_name(pid: int, fallback: str = "Unknown") -> str:
         if name:
             logger.debug(
                 "resolve_app_name: pid=%d → '%s' (resolved via pid=%d)",
-                pid, name, current_pid,
+                pid,
+                name,
+                current_pid,
             )
             return name
 
@@ -550,6 +560,7 @@ def invalidate_cache() -> None:
 if sys.platform == "win32":
     try:
         import psutil as _psutil
+
         _PSUTIL_AVAILABLE = True
     except ImportError:
         _psutil = None  # type: ignore[assignment]
@@ -619,7 +630,9 @@ if sys.platform == "win32":
             if name:
                 logger.debug(
                     "resolve_app_name_windows: pid=%d → '%s' (via pid=%d)",
-                    pid, name, current_pid,
+                    pid,
+                    name,
+                    current_pid,
                 )
                 return name
 
