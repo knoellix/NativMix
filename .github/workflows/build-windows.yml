@@ -1,12 +1,17 @@
 name: Build Windows Installer
 
+# Tag pushes (v*): build Setup.exe and attach to the GitHub Release.
+# workflow_dispatch: build from the selected branch/ref and upload an Actions
+# artifact only — does NOT touch a release (safe for Windows test branches).
+
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 permissions:
-  contents: write   # required to create releases and upload assets
+  contents: write   # required to create releases and upload assets on tags
 
 jobs:
   build-windows:
@@ -25,14 +30,36 @@ jobs:
         with:
           python-version: '3.12'
 
-      # ── Extract version from tag (v1.0.7 → 1.0.7) ───────────────────────────
+      # ── Version: tag name, or metadata.py on manual runs ────────────────────
       - name: Extract version
         id: version
         shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
-          $v = "${{ github.ref_name }}" -replace '^v', ''
+          if ($env:REF_TYPE -eq "tag") {
+            $v = $env:REF_NAME -replace '^v', ''
+            $suffix = "release"
+            $is_release = "true"
+          } else {
+            $line = Get-Content "lib\nativmix\metadata.py" | Select-String -Pattern '__version__\s*='
+            if ($line -match '"([^"]+)"') {
+              $v = $Matches[1]
+            } elseif ($line -match "'([^']+)'") {
+              $v = $Matches[1]
+            } else {
+              Write-Error "Could not read __version__ from metadata.py"
+              exit 1
+            }
+            $ref = $env:REF_NAME -replace '[^A-Za-z0-9._-]', '-'
+            $suffix = $ref
+            $is_release = "false"
+          }
           "VERSION=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
-          Write-Host "Building NativMix $v"
+          "SUFFIX=$suffix" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "IS_RELEASE=$is_release" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Building NativMix $v (suffix=$suffix, release=$is_release)"
 
       # ── Inno Setup via Chocolatey ────────────────────────────────────────────
       - name: Install Inno Setup 6
@@ -65,10 +92,12 @@ jobs:
       # ── Inno Setup → packaging/win/output/NativMix-x.y.z-Setup.exe ──────────
       - name: Build installer with Inno Setup
         shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
           New-Item -ItemType Directory -Force packaging\win\output | Out-Null
-          & $iscc /DMyAppVersion="${{ steps.version.outputs.VERSION }}" packaging\win\nativmix.iss
+          & $iscc /DMyAppVersion="$env:APP_VERSION" packaging\win\nativmix.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify installer output
@@ -82,8 +111,9 @@ jobs:
           $mb = [math]::Round($f.Length / 1MB, 1)
           Write-Host "Installer: $($f.Name)  ($mb MB)"
 
-      # ── GitHub Release + asset upload ────────────────────────────────────────
+      # ── Tag only: GitHub Release + asset upload ─────────────────────────────
       - name: Create GitHub Release and upload installer
+        if: steps.version.outputs.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
           name: "NativMix v${{ steps.version.outputs.VERSION }}"
@@ -91,3 +121,12 @@ jobs:
           prerelease: false
           generate_release_notes: true
           files: packaging/win/output/NativMix-*-Setup.exe
+
+      # ── Manual / branch: Actions artifact (does not touch releases) ─────────
+      - name: Upload installer artifact
+        if: steps.version.outputs.IS_RELEASE != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: NativMix-${{ steps.version.outputs.VERSION }}-Setup-${{ steps.version.outputs.SUFFIX }}
+          path: packaging/win/output/NativMix-*-Setup.exe
+          if-no-files-found: error
