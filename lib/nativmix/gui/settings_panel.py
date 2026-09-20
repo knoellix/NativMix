@@ -431,11 +431,12 @@ class SettingsPanel(QGroupBox):
         self._baud_box.currentIndexChanged.connect(self._on_baud_rate_changed)
 
         try:
-            # ── Master Output ──
+            # ── Master Output (Linux / PipeWire only) ──
             mo_layout = QHBoxLayout()
             mo_layout.setContentsMargins(0, 0, 0, 0)
             mo_layout.setSpacing(4)
-            mo_layout.addWidget(QLabel("Master Output:"))
+            self._master_label = QLabel("Master Output:")
+            mo_layout.addWidget(self._master_label)
 
             self._master_box = QComboBox()
             self._master_box.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -443,14 +444,21 @@ class SettingsPanel(QGroupBox):
             self._master_box.activated.connect(self._on_master_selected)
             mo_layout.addWidget(self._master_box)
 
-            mo_refresh_btn = QPushButton("↺")
-            mo_refresh_btn.setFixedSize(26, 26)
-            mo_refresh_btn.setToolTip("Refresh outputs.")
-            mo_refresh_btn.clicked.connect(lambda checked=False: self.master_refresh_requested.emit())
-            mo_layout.addWidget(mo_refresh_btn)
+            self._master_refresh_btn = QPushButton("↺")
+            self._master_refresh_btn.setFixedSize(26, 26)
+            self._master_refresh_btn.setToolTip("Refresh outputs.")
+            self._master_refresh_btn.clicked.connect(lambda checked=False: self.master_refresh_requested.emit())
+            mo_layout.addWidget(self._master_refresh_btn)
 
             root_layout.addLayout(mo_layout)
             root_layout.addSpacing(10)
+
+            if is_windows():
+                # Backend cannot change the default endpoint yet — avoid a dead control.
+                self._master_label.setVisible(False)
+                self._master_box.setVisible(False)
+                self._master_box.setEnabled(False)
+                self._master_refresh_btn.setVisible(False)
 
             # ── Fader Curve Intensity ──────────────────────────────────────────
             fc_layout = QHBoxLayout()
@@ -651,7 +659,7 @@ class SettingsPanel(QGroupBox):
             self._midi_panic_btn.setStyleSheet(_PANIC_BTN_QSS)
             self._midi_panic_btn.setToolTip("Restart MIDI subsystem and clean up virtual ports.")
             self._midi_panic_btn.clicked.connect(lambda checked=False: self.midi_panic_triggered.emit())
-            self._midi_panic_btn.setVisible(not is_windows())
+            # Audio panic is V-Sink/Linux-only; MIDI restart is useful on Windows too.
             panic_layout.addWidget(self._midi_panic_btn)
 
             debug_layout.addLayout(panic_layout)
@@ -689,6 +697,8 @@ class SettingsPanel(QGroupBox):
 
     def populate_master_outputs(self, sinks: list[tuple[str, str]], current: str | None) -> None:
         """Populate the dropdown with (description, name) and set the current default."""
+        if is_windows() or not getattr(self, "_master_box", None):
+            return
         self._master_box.blockSignals(True)
         self._master_box.clear()
 

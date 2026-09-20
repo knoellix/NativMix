@@ -111,3 +111,30 @@ def test_toggle_mute_system_master_app_channel(tmp_path) -> None:
         mgr.toggle_mute(0)
     assert mgr.is_channel_muted(0) is True
     set_mute.assert_called_once_with(True)
+
+
+def test_session_key_prefers_instance_identifier() -> None:
+    from nativmix.audio.wasapi_manager import _session_key
+
+    session = MagicMock()
+    session.ProcessId = 42
+    session.InstanceIdentifier = "{inst-1}"
+    session.Identifier = "{sess-1}"
+    assert _session_key(session) == "i:{inst-1}"
+
+
+def test_session_key_falls_back_to_pid_name() -> None:
+    from nativmix.audio.wasapi_manager import _session_key
+
+    session = MagicMock()
+    session.ProcessId = 7
+    session.InstanceIdentifier = None
+    session.Identifier = None
+    with patch("nativmix.audio.wasapi_manager._session_name", return_value="Chrome"):
+        assert _session_key(session) == "p:7:chrome"
+
+
+def test_poll_interval_is_100ms() -> None:
+    from nativmix.audio.wasapi_manager import _WasapiListenerThread
+
+    assert _WasapiListenerThread._POLL_INTERVAL_MS == 100

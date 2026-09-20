@@ -143,6 +143,32 @@ def _get_sessions() -> list:
         return []
 
 
+def _session_key(session) -> str | None:
+    """
+    Stable key for one WASAPI session.
+
+    Prefer InstanceIdentifier / Identifier so multiple sessions under the same
+    PID (browsers, Electron) are tracked separately. Fall back to pid+name.
+    """
+    try:
+        pid = int(getattr(session, "ProcessId", 0) or 0)
+    except (TypeError, ValueError):
+        pid = 0
+    if pid == 0:
+        return None
+    for attr in ("InstanceIdentifier", "Identifier"):
+        try:
+            val = getattr(session, attr, None)
+            if callable(val):
+                val = val()
+            if val:
+                return f"{attr[0].lower()}:{val}"
+        except Exception as exc:
+            logger.debug("WASAPI session %s unavailable: %s", attr, exc)
+    name = _session_name(session) or "?"
+    return f"p:{pid}:{name.lower()}"
+
+
 # ---------------------------------------------------------------------------
 # Background listener thread
 # ---------------------------------------------------------------------------
@@ -150,25 +176,25 @@ def _get_sessions() -> list:
 
 class _WasapiListenerThread(QThread):
     """
-    Polls Windows Audio Sessions every 150 ms to detect new / removed streams.
+    Polls Windows Audio Sessions every 100 ms to detect new / removed streams.
 
     Emits stream_added for each newly detected session so that
     WasapiManager can apply the Two-Stage Mute-Catch.
     """
 
     stream_added = pyqtSignal(object)  # StreamInfo
-    stream_removed = pyqtSignal(int)  # pid
+    stream_removed = pyqtSignal(str)  # session key
     audit_finished = pyqtSignal()
     status_changed = pyqtSignal(str, str)  # (status_type, message)
 
-    _POLL_INTERVAL_MS = 250
+    _POLL_INTERVAL_MS = 100
 
     def __init__(self, config: ConfigManager, parent: QThread | None = None) -> None:
         super().__init__(parent)
         self._config = config
         self._running = False
-        # pid → app_name for currently known sessions
-        self._known: dict[int, str] = {}
+        # session_key → app_name for currently known sessions
+        self._known: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # QThread entry point
@@ -208,37 +234,40 @@ class _WasapiListenerThread(QThread):
     def _initial_audit(self) -> None:
         """Snapshot existing sessions without muting them."""
         for session in _get_sessions():
-            pid = session.ProcessId
-            if pid == 0:
+            key = _session_key(session)
+            if not key:
                 continue
             name = _session_name(session)
             if name:
-                self._known[pid] = name
+                self._known[key] = name
         logger.debug("WASAPI initial audit: %d sessions found", len(self._known))
 
     def _poll_sessions(self) -> None:
         """Diff current sessions against known ones; emit added/removed signals."""
         sessions = _get_sessions()
-        current: dict[int, str] = {}
+        current: dict[str, str] = {}
 
         for session in sessions:
-            pid = session.ProcessId
-            if pid == 0:
+            key = _session_key(session)
+            if not key:
                 continue
             name = _session_name(session)
             if not name:
                 continue
-            current[pid] = name
+            current[key] = name
 
-            if pid not in self._known:
-                self._known[pid] = name
-                info = StreamInfo(index=pid, app_name=name, pid=pid)
+            if key not in self._known:
+                self._known[key] = name
+                try:
+                    pid = int(getattr(session, "ProcessId", 0) or 0)
+                except (TypeError, ValueError):
+                    pid = 0
+                info = StreamInfo(index=abs(hash(key)) % (10**9), app_name=name, pid=pid)
                 self.stream_added.emit(info)
 
-        # Detect removed sessions
-        for pid in set(self._known) - set(current):
-            del self._known[pid]
-            self.stream_removed.emit(pid)
+        for key in set(self._known) - set(current):
+            del self._known[key]
+            self.stream_removed.emit(key)
 
 
 # ---------------------------------------------------------------------------
@@ -391,6 +420,7 @@ class WasapiManager(AudioBackendBase):
         for app_name in app_names:
             self._apply_volume_by_name(app_name, vol)
             self._apply_mute_by_name(app_name, muted)
+        self._refresh_other_apps_list()
 
     # ------------------------------------------------------------------
     # Stream lifecycle (Two-Stage Mute-Catch)
@@ -435,9 +465,9 @@ class WasapiManager(AudioBackendBase):
         except Exception:
             logger.exception("_on_stream_added: unhandled exception for %s", info.app_name)
 
-    @pyqtSlot(int)
-    def _on_stream_removed(self, pid: int) -> None:
-        logger.debug("WASAPI session removed: pid=%d", pid)
+    @pyqtSlot(str)
+    def _on_stream_removed(self, session_key: str) -> None:
+        logger.debug("WASAPI session removed: %s", session_key)
         self._invalidate_session_cache()
         self._refresh_other_apps_list()
 
