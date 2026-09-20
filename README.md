@@ -45,6 +45,8 @@ NativMix is a hardware-based volume mixer for Linux, built with PyQt6. It connec
 
 
 > **Windows — feedback welcome!** Quick notes (works / breaks where) belong in [Discussions](https://github.com/knoellix/NativMix/discussions). Concrete bugs with repro steps please as an [Issue](https://github.com/knoellix/NativMix/issues).
+>
+> **Windows test build (open):** Branch [`windows-wasapi-fix`](https://github.com/knoelliX/NativMix/tree/windows-wasapi-fix) has fixes for Other Apps, mute reliability, and app naming (e.g. RE-KORD). Installers are built via [Actions → Build Windows Installer](https://github.com/knoelliX/NativMix/actions/workflows/build-windows.yml) (manual run → download the artifact). Not a tagged release — **everyone is welcome to try it and share feedback**, even small quirks. The maintainer does not daily-drive Windows, so your reports matter.
 
 
 | Desktop Environment | Status   | Notes                                                                                                                                                                                            |
