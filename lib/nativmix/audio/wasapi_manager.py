@@ -11,6 +11,7 @@ Feature differences vs. Linux backend:
   - Hardware sink control: system master only (via default audio endpoint).
   - Other Apps: same catch-all semantics as Linux (unmapped sessions).
   - Session list: short TTL cache for mute/volume applies (COM GetAllSessions).
+  - COM: CoInitialize per calling thread (_ensure_com) so GUI mute/volume works.
 
 Install dependencies:
     pip install "nativmix[windows]"
@@ -36,6 +37,10 @@ logger = logging.getLogger(__name__)
 # Reuse WASAPI session list briefly across mute/volume applies (COM GetAllSessions is costly).
 _SESSION_CACHE_TTL_S = 0.15
 
+# Per-thread COM apartment init — mute/volume often run on the GUI thread while
+# CoInitialize historically only ran inside the listener QThread.
+_com_tls = threading.local()
+
 # ---------------------------------------------------------------------------
 # Optional import guard — pycaw / comtypes / psutil are Windows-only
 # ---------------------------------------------------------------------------
@@ -53,6 +58,28 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _ensure_com() -> bool:
+    """Initialize COM for the current thread if needed. Returns True when usable."""
+    if getattr(_com_tls, "ready", False):
+        return True
+    if not _WASAPI_AVAILABLE:
+        return False
+    try:
+        import comtypes
+
+        comtypes.CoInitialize()
+        _com_tls.ready = True
+        return True
+    except Exception as exc:
+        # Already initialized on this thread is fine; treat as ready.
+        msg = str(exc).lower()
+        if "already" in msg or "rpc_e_changed_mode" in msg:
+            _com_tls.ready = True
+            return True
+        logger.warning("WASAPI: CoInitialize failed on thread: %s", exc)
+        return False
 
 
 def _session_name(session) -> str:
@@ -83,27 +110,31 @@ def _session_name(session) -> str:
 
 def _set_session_volume(session, volume: float) -> None:
     """Set master volume on a pycaw session's ISimpleAudioVolume."""
+    if not _ensure_com():
+        return
     try:
         sv = session.SimpleAudioVolume
         if sv:
             sv.SetMasterVolume(max(0.0, min(1.0, volume)), None)
     except Exception as exc:
-        logger.debug("WASAPI SetMasterVolume failed: %s", exc)
+        logger.warning("WASAPI SetMasterVolume failed: %s", exc)
 
 
 def _set_session_mute(session, muted: bool) -> None:
     """Set mute state on a pycaw session's ISimpleAudioVolume."""
+    if not _ensure_com():
+        return
     try:
         sv = session.SimpleAudioVolume
         if sv:
             sv.SetMute(muted, None)
     except Exception as exc:
-        logger.debug("WASAPI SetMute failed: %s", exc)
+        logger.warning("WASAPI SetMute failed: %s", exc)
 
 
 def _get_sessions() -> list:
     """Return all active pycaw AudioSession objects, or [] on error."""
-    if not _WASAPI_AVAILABLE:
+    if not _WASAPI_AVAILABLE or not _ensure_com():
         return []
     try:
         return AudioUtilities.GetAllSessions()
@@ -147,16 +178,7 @@ class _WasapiListenerThread(QThread):
         self._running = True
 
         # COM must be initialised per-thread on Windows.
-        try:
-            import comtypes
-
-            comtypes.CoInitialize()
-            _com_init = True
-        except Exception as exc:
-            _com_init = False
-            logger.warning("WASAPI: COM initialization failed (%s) — audio backend unavailable", exc)
-
-        if not _com_init:
+        if not _ensure_com():
             self.status_changed.emit("error_critical", "COM init failed — audio unavailable")
             self.audit_finished.emit()
             return
@@ -175,14 +197,6 @@ class _WasapiListenerThread(QThread):
             except Exception as exc:
                 logger.warning("WASAPI poll error: %s", exc)
             self.msleep(self._POLL_INTERVAL_MS)
-
-        if _com_init:
-            try:
-                import comtypes
-
-                comtypes.CoUninitialize()
-            except Exception:
-                pass
 
     def stop(self) -> None:
         self._running = False
@@ -617,6 +631,15 @@ class WasapiManager(AudioBackendBase):
         if new_muted:
             self._muted_at_volume[channel_index] = self._poti_volumes.get(channel_index, 0.5)
         self.mute_state_changed.emit(channel_index, new_muted)
+
+        mode = self._config.get_channel_mode(channel_index)
+        if mode == "hardware":
+            hw_id = self._config.get_hardware_id(channel_index) or ""
+            if "system master" in hw_id.lower():
+                self._set_system_master_mute(new_muted)
+            logger.debug("Channel %d muted=%s (hardware)", channel_index, new_muted)
+            return
+
         for app_name in self._config.get_app_names(channel_index):
             self._apply_mute_by_name(app_name, new_muted)
         logger.debug("Channel %d muted=%s", channel_index, new_muted)
@@ -654,8 +677,12 @@ class WasapiManager(AudioBackendBase):
                 _set_session_volume(session, volume)
 
     def _apply_mute_by_name(self, app_name: str, muted: bool) -> None:
-        """Set mute on all active sessions matching app_name (or Other Apps)."""
+        """Set mute on all active sessions matching app_name (or System Master / Other Apps)."""
         app_lower = app_name.lower()
+        if app_lower == "system master":
+            self._set_system_master_mute(muted)
+            return
+
         other_apps_mode = app_lower == "other apps"
         assigned_apps = self._get_explicitly_assigned_apps() if other_apps_mode else set()
 
@@ -667,28 +694,45 @@ class WasapiManager(AudioBackendBase):
             elif name_l == app_lower:
                 _set_session_mute(session, muted)
 
-    def _set_system_master_volume(self, volume: float) -> None:
-        """Set the default audio endpoint master volume.
-
-        The IAudioEndpointVolume interface is acquired once and cached to avoid
-        repeated COM Activate() calls (and the reference-leak risk they carry).
-        The cache is invalidated on any error so the next call re-acquires it.
-        """
-        if self._endpoint_volume is None:
-            try:
-                from ctypes import POINTER, cast
-
-                from comtypes import CLSCTX_ALL
-                from pycaw.api.endpointvolume import IAudioEndpointVolume
-
-                devices = AudioUtilities.GetSpeakers()
-                interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
-                self._endpoint_volume = cast(interface, POINTER(IAudioEndpointVolume))
-            except Exception as exc:
-                logger.debug("WASAPI: could not acquire IAudioEndpointVolume: %s", exc)
-                return
+    def _ensure_endpoint_volume(self):
+        """Return cached IAudioEndpointVolume, or None on failure."""
+        if not _ensure_com():
+            return None
+        if self._endpoint_volume is not None:
+            return self._endpoint_volume
         try:
-            self._endpoint_volume.SetMasterVolumeLevelScalar(max(0.0, min(1.0, volume)), None)
+            from ctypes import POINTER, cast
+
+            from comtypes import CLSCTX_ALL
+            from pycaw.api.endpointvolume import IAudioEndpointVolume
+
+            devices = AudioUtilities.GetSpeakers()
+            interface = devices.Activate(IAudioEndpointVolume._iid_, CLSCTX_ALL, None)
+            self._endpoint_volume = cast(interface, POINTER(IAudioEndpointVolume))
+            return self._endpoint_volume
         except Exception as exc:
-            logger.debug("WASAPI system master volume failed: %s", exc)
-            self._endpoint_volume = None  # Re-acquire on next call
+            logger.warning("WASAPI: could not acquire IAudioEndpointVolume: %s", exc)
+            self._endpoint_volume = None
+            return None
+
+    def _set_system_master_volume(self, volume: float) -> None:
+        """Set the default audio endpoint master volume."""
+        endpoint = self._ensure_endpoint_volume()
+        if endpoint is None:
+            return
+        try:
+            endpoint.SetMasterVolumeLevelScalar(max(0.0, min(1.0, volume)), None)
+        except Exception as exc:
+            logger.warning("WASAPI system master volume failed: %s", exc)
+            self._endpoint_volume = None
+
+    def _set_system_master_mute(self, muted: bool) -> None:
+        """Mute/unmute the default audio endpoint (System Master)."""
+        endpoint = self._ensure_endpoint_volume()
+        if endpoint is None:
+            return
+        try:
+            endpoint.SetMute(1 if muted else 0, None)
+        except Exception as exc:
+            logger.warning("WASAPI system master mute failed: %s", exc)
+            self._endpoint_volume = None

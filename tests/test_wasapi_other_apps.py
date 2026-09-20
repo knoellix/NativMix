@@ -95,3 +95,19 @@ def test_session_cache_reuses_list(tmp_path) -> None:
         third = mgr._cached_sessions()
         assert third is sessions
         assert get_sessions.call_count == 2
+
+
+def test_apply_mute_system_master_uses_endpoint(tmp_path) -> None:
+    mgr = _mgr(tmp_path)
+    with patch.object(mgr, "_set_system_master_mute") as set_mute:
+        mgr._apply_mute_by_name("System Master", True)
+    set_mute.assert_called_once_with(True)
+
+
+def test_toggle_mute_system_master_app_channel(tmp_path) -> None:
+    mgr = _mgr(tmp_path)
+    mgr._config.set_app_names(0, ["System Master"])
+    with patch.object(mgr, "_set_system_master_mute") as set_mute:
+        mgr.toggle_mute(0)
+    assert mgr.is_channel_muted(0) is True
+    set_mute.assert_called_once_with(True)
