@@ -9,6 +9,8 @@ Feature differences vs. Linux backend:
   - Session detection: polling at ~250 ms (STA/MTA threading constraints make
     COM session callbacks impractical; polling is the stable approach).
   - Hardware sink control: system master only (via default audio endpoint).
+  - Other Apps: same catch-all semantics as Linux (unmapped sessions).
+  - Session list: short TTL cache for mute/volume applies (COM GetAllSessions).
 
 Install dependencies:
     pip install "nativmix[windows]"
@@ -19,7 +21,8 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING
+import time
+from typing import TYPE_CHECKING, Any
 
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 
@@ -29,6 +32,9 @@ if TYPE_CHECKING:
     from nativmix.utils.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
+
+# Reuse WASAPI session list briefly across mute/volume applies (COM GetAllSessions is costly).
+_SESSION_CACHE_TTL_S = 0.15
 
 # ---------------------------------------------------------------------------
 # Optional import guard — pycaw / comtypes / psutil are Windows-only
@@ -258,6 +264,10 @@ class WasapiManager(AudioBackendBase):
         self._state_lock = threading.RLock()
         # Cached IAudioEndpointVolume — acquired lazily in _set_system_master_volume
         self._endpoint_volume = None
+        # Short-lived session list cache for mute/volume (invalidated on stream churn)
+        self._sessions_cache: list[Any] | None = None
+        self._sessions_cache_mono: float = 0.0
+        self._last_other_apps: list[str] = []
 
     # ------------------------------------------------------------------
     # AudioBackendBase interface
@@ -384,9 +394,11 @@ class WasapiManager(AudioBackendBase):
         audible for up to ~250 ms before this slot fires.
         """
         try:
-            ch = self._config.find_channel_for_app(info.app_name)
+            self._invalidate_session_cache()
+            ch = self._resolve_target_channel(info.app_name)
             if ch is None:
                 logger.debug("New unmapped session: %s (pid=%d)", info.app_name, info.pid)
+                self._refresh_other_apps_list()
                 return
 
             # Stage 1: mute immediately
@@ -405,12 +417,15 @@ class WasapiManager(AudioBackendBase):
                 info.app_name,
                 ch,
             )
+            self._refresh_other_apps_list()
         except Exception:
             logger.exception("_on_stream_added: unhandled exception for %s", info.app_name)
 
     @pyqtSlot(int)
     def _on_stream_removed(self, pid: int) -> None:
         logger.debug("WASAPI session removed: pid=%d", pid)
+        self._invalidate_session_cache()
+        self._refresh_other_apps_list()
 
     # ------------------------------------------------------------------
     # V-Sink stubs (not supported on Windows)
@@ -520,6 +535,81 @@ class WasapiManager(AudioBackendBase):
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _invalidate_session_cache(self) -> None:
+        with self._state_lock:
+            self._sessions_cache = None
+
+    def _cached_sessions(self) -> list[Any]:
+        """Return active WASAPI sessions, reusing a short TTL cache."""
+        now = time.monotonic()
+        with self._state_lock:
+            if self._sessions_cache is not None and (now - self._sessions_cache_mono) < _SESSION_CACHE_TTL_S:
+                return self._sessions_cache
+        sessions = _get_sessions()
+        with self._state_lock:
+            self._sessions_cache = sessions
+            self._sessions_cache_mono = now
+        return sessions
+
+    def _iter_named_sessions(self) -> list[tuple[Any, str]]:
+        """Active sessions with a resolvable app name."""
+        named: list[tuple[Any, str]] = []
+        for session in self._cached_sessions():
+            name = _session_name(session)
+            if name:
+                named.append((session, name))
+        return named
+
+    def _get_explicitly_assigned_apps(self) -> set[str]:
+        """Lowercased app names mapped to channels, excluding catch-alls."""
+        assigned = set(self._config.get_all_assigned_apps_by_name())
+        assigned.discard("other apps")
+        assigned.discard("system master")
+        return assigned
+
+    def _resolve_target_channel(self, app_name: str) -> int | None:
+        """
+        Map a resolved session name to a channel index.
+
+        Exact profile mappings win. If a channel owns the "Other Apps"
+        catch-all, any stream not explicitly assigned (and not System Master)
+        maps to that channel — same rule as Linux PipeWireManager.
+        """
+        direct = self._config.find_channel_for_app(app_name)
+        if direct is not None:
+            return direct
+
+        name_l = app_name.lower()
+        if name_l in ("system master", "other apps"):
+            return None
+
+        other_ch: int | None = None
+        for ch_idx in range(self._config.num_channels):
+            apps = [str(a).lower() for a in self._config.get_app_names(ch_idx)]
+            if "other apps" in apps:
+                other_ch = ch_idx
+                break
+
+        if other_ch is not None and name_l not in self._get_explicitly_assigned_apps():
+            return other_ch
+        return None
+
+    def _refresh_other_apps_list(self) -> None:
+        """Emit other_apps_changed when the unmapped session set changes."""
+        assigned = self._config.get_all_assigned_apps_by_name()
+        unmapped: list[str] = []
+        seen: set[str] = set()
+        for _session, name in self._iter_named_sessions():
+            key = name.lower()
+            if key in assigned or key == "system master" or key in seen:
+                continue
+            seen.add(key)
+            unmapped.append(name)
+        unmapped.sort(key=str.lower)
+        if unmapped != self._last_other_apps:
+            self._last_other_apps = unmapped
+            self.other_apps_changed.emit(unmapped)
+
     def _do_toggle_mute(self, channel_index: int) -> None:
         """Toggle mute — must be called while holding _state_lock."""
         new_muted = not self._channel_muted.get(channel_index, False)
@@ -546,20 +636,35 @@ class WasapiManager(AudioBackendBase):
         self.channel_volume_changed.emit(channel_index, volume)
 
     def _apply_volume_by_name(self, app_name: str, volume: float) -> None:
-        """Set volume on all active sessions matching app_name."""
+        """Set volume on all active sessions matching app_name (or Other Apps)."""
         app_lower = app_name.lower()
         if app_lower == "system master":
             self._set_system_master_volume(volume)
             return
-        for session in _get_sessions():
-            if _session_name(session).lower() == app_lower:
+
+        other_apps_mode = app_lower == "other apps"
+        assigned_apps = self._get_explicitly_assigned_apps() if other_apps_mode else set()
+
+        for session, name in self._iter_named_sessions():
+            name_l = name.lower()
+            if other_apps_mode:
+                if name_l not in assigned_apps and name_l != "system master":
+                    _set_session_volume(session, volume)
+            elif name_l == app_lower:
                 _set_session_volume(session, volume)
 
     def _apply_mute_by_name(self, app_name: str, muted: bool) -> None:
-        """Set mute state on all active sessions matching app_name."""
+        """Set mute on all active sessions matching app_name (or Other Apps)."""
         app_lower = app_name.lower()
-        for session in _get_sessions():
-            if _session_name(session).lower() == app_lower:
+        other_apps_mode = app_lower == "other apps"
+        assigned_apps = self._get_explicitly_assigned_apps() if other_apps_mode else set()
+
+        for session, name in self._iter_named_sessions():
+            name_l = name.lower()
+            if other_apps_mode:
+                if name_l not in assigned_apps and name_l != "system master":
+                    _set_session_mute(session, muted)
+            elif name_l == app_lower:
                 _set_session_mute(session, muted)
 
     def _set_system_master_volume(self, volume: float) -> None:
