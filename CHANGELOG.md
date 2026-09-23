@@ -8,6 +8,8 @@ All notable changes to NativMix are documented in this file.
 - Feat: Easy Effects coexistence — if a mapped app sits on an EE processing sink, NativMix does not reclaim routing (V-Sink or default sink); volume/mute still apply on the stream
 - Feat: Per-app routing pause — right-click an app row to pause/resume NativMix destination routing (persisted as `routing_paused_apps`); label uses accent when NM owns the sink, muted when paused or EE-held
 - Fix: V-Sink routing no longer double-applies fader volume on the stream and the null-sink (apps sounded quieter when routed through a V-Sink)
+- Windows (test branch `windows-wasapi-fix`, #32): Other Apps catch-all; faster mute via session cache + per-thread COM; session keys by InstanceIdentifier; ~100 ms poll; hide Master Output (no-op); RE-KORD name maps
+- Windows (test branch): soft-apply volume/mute on new sessions — no reflex mute (YouTube pause/resume no longer ramps from silence)
 
 ## v1.0.18
 
