@@ -6,8 +6,8 @@ Windows Audio Session API (WASAPI).  Equivalent to PipeWireManager on Linux.
 
 Feature differences vs. Linux backend:
   - V-Sinks: not supported — enable_v_sink / disable_v_sink are No-Ops.
-  - Session detection: polling at ~250 ms (STA/MTA threading constraints make
-    COM session callbacks impractical; polling is the stable approach).
+  - Session detection: polling (~100 ms); soft-apply volume/mute on new sessions
+    (no Linux-style reflex mute — pause/resume would sound like a ramp from 0).
   - Hardware sink control: system master only (via default audio endpoint).
   - Other Apps: same catch-all semantics as Linux (unmapped sessions).
   - Session list: short TTL cache for mute/volume applies (COM GetAllSessions).
@@ -429,13 +429,13 @@ class WasapiManager(AudioBackendBase):
     @pyqtSlot(object)
     def _on_stream_added(self, info: StreamInfo) -> None:
         """
-        Two-Stage Mute-Catch (Windows edition):
+        Apply fader volume / channel mute when a WASAPI session appears.
 
-        Stage 1 — Reflex: mute the new session immediately.
-        Stage 2 — Resolution: apply the correct fader volume, then unmute.
-
-        Note: because we use polling, the session may have already been
-        audible for up to ~250 ms before this slot fires.
+        Unlike Linux PipeWire (Two-Stage Mute-Catch with an immediate reflex
+        mute), Windows often recreates sessions on pause/resume (e.g. YouTube).
+        A reflex mute there sounds like a ramp from silence to the preset.
+        We only soft-apply the desired volume and mute state — still catching
+        default 1.0 sessions without the mute dance.
         """
         try:
             self._invalidate_session_cache()
@@ -445,17 +445,13 @@ class WasapiManager(AudioBackendBase):
                 self._refresh_other_apps_list()
                 return
 
-            # Stage 1: mute immediately
-            self._apply_mute_by_name(info.app_name, True)
-
-            # Stage 2: apply volume and restore channel mute state
             with self._state_lock:
                 vol = self._poti_volumes.get(ch, 0.5)
                 muted = self._channel_muted.get(ch, False)
             self._apply_volume_by_name(info.app_name, vol)
             self._apply_mute_by_name(info.app_name, muted)
             logger.debug(
-                "Two-Stage: applied vol=%.2f muted=%s to %s (ch=%d)",
+                "WASAPI soft-apply: vol=%.2f muted=%s to %s (ch=%d)",
                 vol,
                 muted,
                 info.app_name,

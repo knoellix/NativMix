@@ -138,3 +138,32 @@ def test_poll_interval_is_100ms() -> None:
     from nativmix.audio.wasapi_manager import _WasapiListenerThread
 
     assert _WasapiListenerThread._POLL_INTERVAL_MS == 100
+
+
+def test_stream_added_soft_applies_without_reflex_mute(tmp_path) -> None:
+    """Pause/resume must not mute-then-unmute; only apply target volume/mute."""
+    from nativmix.audio.base import StreamInfo
+
+    mgr = _mgr(tmp_path)
+    mgr._config.set_app_names(0, ["Chrome"])
+    with mgr._state_lock:
+        mgr._poti_volumes[0] = 0.42
+        mgr._channel_muted[0] = False
+
+    mute_calls: list[bool] = []
+
+    def _track_mute(_name: str, muted: bool) -> None:
+        mute_calls.append(muted)
+
+    info = StreamInfo(index=1, app_name="Chrome", pid=99)
+    with (
+        patch.object(mgr, "_apply_volume_by_name") as set_vol,
+        patch.object(mgr, "_apply_mute_by_name", side_effect=_track_mute) as set_mute,
+        patch.object(mgr, "_refresh_other_apps_list"),
+        patch.object(mgr, "_invalidate_session_cache"),
+    ):
+        mgr._on_stream_added(info)
+
+    set_vol.assert_called_once_with("Chrome", 0.42)
+    set_mute.assert_called_once_with("Chrome", False)
+    assert mute_calls == [False]
