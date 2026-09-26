@@ -521,6 +521,31 @@ class SettingsPanel(QGroupBox):
             self._auto_search_cb.toggled.connect(self._on_auto_search_toggled)
             bottom_layout.addWidget(self._auto_search_cb)
 
+            if is_windows():
+                appearance_row = QHBoxLayout()
+                appearance_row.setContentsMargins(0, 0, 0, 0)
+                appearance_row.setSpacing(4)
+                appearance_lbl = QLabel("Appearance:")
+                appearance_lbl.setToolTip(
+                    "System: native Windows Qt style.\nNativMix: custom light/dark palette (cool-blue accent)."
+                )
+                appearance_row.addWidget(appearance_lbl)
+                self._ui_theme_box = QComboBox()
+                self._ui_theme_box.addItem("System", "system")
+                self._ui_theme_box.addItem("NativMix", "nativmix")
+                self._ui_theme_box.setToolTip(
+                    "System keeps the Windows look. NativMix uses a dedicated "
+                    "light/dark theme that follows the OS color scheme."
+                )
+                idx = self._ui_theme_box.findData(self._config.ui_theme)
+                self._ui_theme_box.blockSignals(True)
+                self._ui_theme_box.setCurrentIndex(idx if idx >= 0 else 0)
+                self._ui_theme_box.blockSignals(False)
+                self._ui_theme_box.currentIndexChanged.connect(self._on_ui_theme_changed)
+                appearance_row.addWidget(self._ui_theme_box)
+                appearance_row.addStretch()
+                root_layout.addLayout(appearance_row)
+
             if is_windows() or is_flatpak():
                 self._check_updates_cb = QCheckBox("Check for updates")
                 self._check_updates_cb.setToolTip(
@@ -981,6 +1006,26 @@ class SettingsPanel(QGroupBox):
         self._config.check_for_updates = checked
         self._config.save()
         logger.debug("Check for updates toggled: %s", checked)
+
+    @_slot_guard
+    @pyqtSlot(int)
+    def _on_ui_theme_changed(self, _index: int = 0) -> None:
+        theme = self._ui_theme_box.currentData()
+        if not isinstance(theme, str):
+            theme = "system"
+        self._config.ui_theme = theme
+        self._config.save()
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            from nativmix.gui.theme import apply_ui_theme
+
+            app = QApplication.instance()
+            if app is not None:
+                apply_ui_theme(app, theme)
+        except Exception:
+            logger.exception("Failed to apply UI theme: %s", theme)
+        logger.debug("UI theme changed: %s", theme)
 
     @pyqtSlot(int)
     def _on_curve_changed(self, slider_value: int) -> None:

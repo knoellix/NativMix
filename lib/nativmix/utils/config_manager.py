@@ -71,7 +71,7 @@ from nativmix.utils.paths import get_config_dir as _get_config_dir_from_paths
 
 logger = logging.getLogger(__name__)
 
-CONFIG_VERSION = 8
+CONFIG_VERSION = 9
 
 # App names that have special routing semantics and cannot be mixed with regular apps.
 SPECIAL_APPS: frozenset[str] = frozenset({"system master", "other apps"})
@@ -108,6 +108,8 @@ def _default_settings(num_channels: int = 5) -> dict[str, Any]:
         "check_for_updates": True,
         # Normalized version string the user chose not to be reminded about again
         "update_dismissed_version": None,
+        # Windows GUI: "system" (native Qt/Windows style) or "nativmix" (custom Fusion palette)
+        "ui_theme": "system",
     }
 
 
@@ -382,6 +384,8 @@ class ConfigManager(QObject):
         self._data["settings"].setdefault("midi_fader_feedback", False)
         self._data["settings"].setdefault("check_for_updates", True)
         self._data["settings"].setdefault("update_dismissed_version", None)
+        # v8 → v9: Windows appearance (system vs NativMix custom theme)
+        self._data["settings"].setdefault("ui_theme", "system")
         hw = self._data.setdefault("hardware", {})
         hw.setdefault("input_mode", "usb")
         hw.setdefault("midi_device", "")
@@ -734,6 +738,19 @@ class ConfigManager(QObject):
     @check_for_updates.setter
     def check_for_updates(self, value: bool) -> None:
         self._data.setdefault("settings", {})["check_for_updates"] = bool(value)
+
+    @property
+    def ui_theme(self) -> str:
+        """Windows appearance: ``system`` (native) or ``nativmix`` (custom Fusion palette)."""
+        raw = str(self._data.get("settings", {}).get("ui_theme", "system")).lower()
+        return raw if raw in ("system", "nativmix") else "system"
+
+    @ui_theme.setter
+    def ui_theme(self, value: str) -> None:
+        theme = str(value).lower()
+        if theme not in ("system", "nativmix"):
+            theme = "system"
+        self._data.setdefault("settings", {})["ui_theme"] = theme
 
     @property
     def update_dismissed_version(self) -> str | None:

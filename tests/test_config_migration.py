@@ -87,9 +87,10 @@ def test_migration_sets_current_config_version(tmp_config_path, tmp_profiles_dir
     tmp_config_path.write_text(json.dumps(_v6_config(5)))
     _load_manager(tmp_config_path, tmp_profiles_dir)
     saved = json.loads(tmp_config_path.read_text())
-    assert saved["version"] == 8
+    assert saved["version"] == 9
     assert saved["settings"].get("check_for_updates") is True
     assert saved["settings"].get("update_dismissed_version") is None
+    assert saved["settings"].get("ui_theme") == "system"
 
 
 def test_fresh_install_creates_profile_1(tmp_config_path, tmp_profiles_dir):

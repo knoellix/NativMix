@@ -10,6 +10,7 @@ All notable changes to NativMix are documented in this file.
 - Fix: V-Sink routing no longer double-applies fader volume on the stream and the null-sink (apps sounded quieter when routed through a V-Sink)
 - Windows (test branch `windows-wasapi-fix`, #32): Other Apps catch-all; faster mute via session cache + per-thread COM; session keys by InstanceIdentifier; ~100 ms poll; hide Master Output (no-op); RE-KORD name maps
 - Windows (test branch): soft-apply volume/mute on new sessions — no reflex mute (YouTube pause/resume no longer ramps from silence)
+- Windows (test branch): Settings → Appearance — System (default) or NativMix custom light/dark theme
 
 ## v1.0.18
 

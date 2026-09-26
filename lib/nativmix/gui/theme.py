@@ -1,12 +1,10 @@
 """
-XDG Desktop Portal theming helper for NativMix.
+Theming helpers for NativMix.
 
-Reads the system color scheme and accent color via the
-org.freedesktop.portal.Settings D-Bus interface so the app adapts to
-CachyOS / KDE / GNOME theming without hard-coded DE-specific paths.
-
-When Qt only exposes Fusion (typical Flatpak sandbox), NativMix applies a
-dedicated light/dark fallback palette — not the host desktop theme.
+- Linux: XDG Desktop Portal color-scheme / accent via D-Bus.
+- Fusion-only environments (typical Flatpak): dedicated light/dark palette.
+- Windows (optional): same custom palette when the user picks the NativMix
+  appearance in Settings; default remains the native Windows Qt style.
 """
 
 from __future__ import annotations
@@ -17,6 +15,7 @@ from enum import IntEnum
 from PyQt6.QtCore import QObject, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtDBus import QDBusConnection, QDBusInterface, QDBusMessage, QDBusVariant
 from PyQt6.QtGui import QColor, QGuiApplication, QPalette
+from PyQt6.QtWidgets import QStyleFactory
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +194,95 @@ def apply_fusion_fallback(
     if callable(set_style):
         set_style(fusion_tooltip_stylesheet(prefer_dark))
     logger.info("Applied Fusion fallback palette (%s)", "dark" if prefer_dark else "light")
+
+
+def remember_native_style(app: QGuiApplication) -> None:
+    """Store the Qt style name chosen before any NativMix override."""
+    if getattr(app, "_nativmix_native_style", None):
+        return
+    name = (app.style().objectName() if app.style() else "") or ""
+    app._nativmix_native_style = name  # type: ignore[attr-defined]
+
+
+def _preferred_system_style_name(app: QGuiApplication) -> str:
+    stored = getattr(app, "_nativmix_native_style", None)
+    if isinstance(stored, str) and stored and stored.lower() != "fusion":
+        return stored
+    available = {s.lower(): s for s in QStyleFactory.keys()}
+    for pref in ("windowsvista", "windows", "macos", "kvantum", "breeze"):
+        if pref in available:
+            return available[pref]
+    if "fusion" in available:
+        return available["fusion"]
+    return stored if isinstance(stored, str) and stored else "Fusion"
+
+
+def _ensure_qt_scheme_watcher(app: QGuiApplication) -> None:
+    """Re-apply NativMix palette when the OS light/dark preference changes."""
+    if getattr(app, "_nativmix_scheme_watcher", None) is not None:
+        return
+    hints = QGuiApplication.styleHints()
+    if not hasattr(hints, "colorSchemeChanged"):
+        return
+
+    class _QtSchemeWatcher(QObject):
+        def _on_scheme_changed(self, *_args: object) -> None:
+            prefer_dark = qt_system_prefers_dark()
+            apply_fusion_fallback(app, bool(prefer_dark) if prefer_dark is not None else False)
+
+    watcher = _QtSchemeWatcher(app)
+    hints.colorSchemeChanged.connect(watcher._on_scheme_changed)
+    app._nativmix_scheme_watcher = watcher  # type: ignore[attr-defined]
+
+
+def _clear_qt_scheme_watcher(app: QGuiApplication) -> None:
+    watcher = getattr(app, "_nativmix_scheme_watcher", None)
+    if watcher is None:
+        return
+    hints = QGuiApplication.styleHints()
+    if hasattr(hints, "colorSchemeChanged"):
+        try:
+            hints.colorSchemeChanged.disconnect(watcher._on_scheme_changed)
+        except TypeError:
+            logger.debug("colorSchemeChanged was not connected")
+    app._nativmix_scheme_watcher = None  # type: ignore[attr-defined]
+    watcher.deleteLater()
+
+
+def apply_ui_theme(app: QGuiApplication, theme: str) -> None:
+    """
+    Apply Windows (or optional) appearance mode.
+
+    ``system`` — restore the remembered native Qt style / standard palette.
+    ``nativmix`` — Fusion + dedicated cool-blue light/dark palette.
+    """
+    remember_native_style(app)
+    mode = str(theme).lower()
+    if mode not in ("system", "nativmix"):
+        mode = "system"
+
+    set_style = getattr(app, "setStyle", None)
+    set_sheet = getattr(app, "setStyleSheet", None)
+
+    if mode == "nativmix":
+        if callable(set_style):
+            set_style("Fusion")
+        prefer_dark = qt_system_prefers_dark()
+        apply_fusion_fallback(app, bool(prefer_dark) if prefer_dark is not None else False)
+        _ensure_qt_scheme_watcher(app)
+        logger.info("UI theme: NativMix (Fusion custom palette)")
+        return
+
+    _clear_qt_scheme_watcher(app)
+    native = _preferred_system_style_name(app)
+    if callable(set_style):
+        set_style(native)
+    style = app.style()
+    if style is not None:
+        app.setPalette(style.standardPalette())
+    if callable(set_sheet):
+        set_sheet("")
+    logger.info("UI theme: system style (%s)", native or "<unknown>")
 
 
 class ThemeWatcher(QObject):

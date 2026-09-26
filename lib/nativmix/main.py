@@ -440,9 +440,12 @@ def main() -> None:
             ColorScheme,
             ThemeWatcher,
             apply_fusion_fallback,
+            remember_native_style,
             resolve_prefer_dark,
         )
         from nativmix.utils.paths import is_flatpak
+
+        remember_native_style(app)
 
         # Keep the native system style chosen by Qt/desktop integration.
         # Only apply our palette fallback when we are truly on Fusion
@@ -527,6 +530,15 @@ def main() -> None:
 
     # ── Config ─────────────────────────────────────────────────────────
     config = ConfigManager()
+
+    # Windows: optional NativMix custom theme (default remains system style).
+    if os_name == "Windows":
+        try:
+            from nativmix.gui.theme import apply_ui_theme
+
+            apply_ui_theme(app, config.ui_theme)
+        except Exception as e:
+            logger.warning("Failed to apply Windows UI theme: %s", e)
 
     # ── Final Logging: file + level from config ─────────────────────────
     setup_logging(config.debug_logging)

@@ -13,8 +13,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 from nativmix.gui.theme import (
     ColorScheme,
     ThemeWatcher,
+    apply_ui_theme,
     build_fusion_fallback_palette,
     fusion_tooltip_stylesheet,
+    remember_native_style,
     resolve_prefer_dark,
 )
 
@@ -103,3 +105,19 @@ def test_fusion_tooltip_stylesheet_contains_colors(prefer_dark: bool) -> None:
     assert "QToolTip" in css
     assert "background-color:" in css
     assert "color:" in css
+
+
+def test_apply_ui_theme_nativmix_uses_custom_palette(qapp) -> None:
+    remember_native_style(qapp)
+    apply_ui_theme(qapp, "nativmix")
+    highlight = qapp.palette().color(QPalette.ColorGroup.Active, QPalette.ColorRole.Highlight)
+    # Cool-blue accent from dedicated NativMix palette (light or dark).
+    assert highlight.name().lower() in {"#3ba4e8", "#2f8fcf"}
+
+
+def test_apply_ui_theme_system_clears_tooltip_stylesheet(qapp) -> None:
+    remember_native_style(qapp)
+    apply_ui_theme(qapp, "nativmix")
+    assert "QToolTip" in qapp.styleSheet()
+    apply_ui_theme(qapp, "system")
+    assert qapp.styleSheet() == ""
