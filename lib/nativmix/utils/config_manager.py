@@ -138,6 +138,7 @@ def _default_config(num_channels: int = 5) -> dict[str, Any]:
                 "midi_channel": 0,  # Legacy alias for midi_bindings[0].midi_channel
                 "midi_mute_channel": 0,
                 "midi_bindings": [{"cc": None, "midi_channel": 0}],
+                "mute_hotkey": None,
                 "hardware_id": None,
                 "app_names": [],
                 "volume": 1.0,  # Last known volume [0.0, 1.0]
@@ -532,6 +533,7 @@ class ConfigManager(QObject):
                     "midi_channel": 0,
                     "midi_mute_channel": 0,
                     "midi_bindings": [{"cc": None, "midi_channel": 0}],
+                    "mute_hotkey": None,
                     "app_names": [],
                     "volume": 1.0,
                 }
@@ -545,6 +547,7 @@ class ConfigManager(QObject):
         for idx, ch in enumerate(channels):
             ch["is_midi"] = idx >= hw_count
             ch["index"] = idx
+            ch.setdefault("mute_hotkey", None)
 
         from nativmix.utils.channel_order import normalize_channel_order
 
@@ -855,6 +858,7 @@ class ConfigManager(QObject):
                     "midi_channel": 0,
                     "midi_mute_channel": 0,
                     "midi_bindings": [{"cc": None, "midi_channel": 0}],
+                    "mute_hotkey": None,
                     "hardware_id": None,
                     "app_names": [],
                     "routing_paused_apps": [],
@@ -1306,6 +1310,41 @@ class ConfigManager(QObject):
                     midi_ch = 0
                 midi_ch = max(0, min(15, midi_ch))
                 mappings[(midi_ch, int(cc))] = int(ch["index"])
+        return mappings
+
+    def get_mute_hotkey(self, channel: int) -> str | None:
+        """Return portable mute hotkey string for *channel*, or None."""
+        raw = self._channel(channel).get("mute_hotkey")
+        if raw is None or raw == "":
+            return None
+        return str(raw)
+
+    def set_mute_hotkey(self, channel: int, hotkey: str | None) -> None:
+        """Assign a Windows mute hotkey; clears the same key on other channels."""
+        from nativmix.utils.win_hotkeys import normalize_hotkey
+
+        normalized = normalize_hotkey(hotkey) if hotkey else None
+        if normalized:
+            for ch in self._data.get("channels", []):
+                if ch.get("mute_hotkey") == normalized and int(ch.get("index", -1)) != channel:
+                    ch["mute_hotkey"] = None
+                    logger.info(
+                        "Mute hotkey %r moved from channel %s to %d",
+                        normalized,
+                        ch.get("index"),
+                        channel,
+                    )
+        self._channel(channel)["mute_hotkey"] = normalized
+        self.save()
+
+    def get_all_mute_hotkeys(self) -> dict[str, int]:
+        """Return portable hotkey string → channel index."""
+        mappings: dict[str, int] = {}
+        for ch in self._data.get("channels", []):
+            raw = ch.get("mute_hotkey")
+            if not raw:
+                continue
+            mappings[str(raw)] = int(ch["index"])
         return mappings
 
     def clear_usb_channel_mappings(self) -> None:

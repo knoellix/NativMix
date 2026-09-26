@@ -34,6 +34,7 @@ def default_channels(count: int) -> list[dict[str, Any]]:
             "midi_channel": 0,
             "midi_mute_channel": 0,
             "midi_bindings": [{"cc": None, "midi_channel": 0}],
+            "mute_hotkey": None,
             "inverted": False,
             "v_sink": False,
             "mode": "app",

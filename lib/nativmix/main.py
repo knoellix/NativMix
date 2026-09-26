@@ -588,6 +588,16 @@ def main() -> None:
         profile_manager=profile_manager,
     )
 
+    mute_hotkeys = None
+    if os_name == "Windows":
+        from nativmix.utils.win_hotkeys import MuteHotkeyManager
+
+        mute_hotkeys = MuteHotkeyManager(parent=window)
+        window.set_mute_hotkey_manager(mute_hotkeys)
+        mute_hotkeys.triggered.connect(backend.toggle_mute)
+        mute_hotkeys.learn_finished.connect(window._on_mute_hotkey_learned)
+        mute_hotkeys.learn_cancelled.connect(window._on_mute_hotkey_learn_cancelled)
+
     tray = TrayIcon(main_window=window)
     if not tray.isSystemTrayAvailable():
         logger.warning("System tray not available – running without tray icon")
@@ -944,6 +954,17 @@ def main() -> None:
             # requestActivate() is kept in tray._show_window() and
             # _ipc_show_window() where the user explicitly requests focus.
             QTimer.singleShot(500, lambda: window.set_show_requested(False))
+        if mute_hotkeys is not None:
+            # winId() is valid after the window has been shown (or created).
+            def _attach_mute_hotkeys() -> None:
+                try:
+                    hwnd = int(window.winId())
+                    mute_hotkeys.attach(app, hwnd)
+                    window._rebuild_mute_hotkeys()
+                except Exception:
+                    logger.exception("Failed to attach Windows mute hotkeys")
+
+            QTimer.singleShot(0, _attach_mute_hotkeys)
         QTimer.singleShot(350, lambda: (_push_midi_fader_feedback(), _push_midi_mute_feedback()))
 
     coordinator.ready.connect(on_app_ready)
@@ -1130,6 +1151,11 @@ def main() -> None:
     _exit_watchdog.start()
 
     sleep_watcher.stop()
+    if mute_hotkeys is not None:
+        try:
+            mute_hotkeys.detach()
+        except Exception:
+            logger.debug("MuteHotkeyManager.detach failed", exc_info=True)
     arduino.stop()
     midi.stop()
     backend.stop()

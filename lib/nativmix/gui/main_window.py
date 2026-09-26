@@ -401,6 +401,8 @@ class ChannelWidget(QFrame):
     strip_drop = pyqtSignal(int, object)  # source_id, global QPoint
     reorder_tracking = pyqtSignal(object)  # global QPoint while dragging
     reorder_active_changed = pyqtSignal(bool)
+    mute_hotkey_learn_requested = pyqtSignal(int)  # channel_index (Windows)
+    mute_hotkey_changed = pyqtSignal()  # bindings saved — rebuild RegisterHotKey
 
     def __init__(
         self,
@@ -417,6 +419,7 @@ class ChannelWidget(QFrame):
         self.is_midi_channel = is_midi
         self._compact = False
         self._drag_blocked = False
+        self._mute_hotkey_learning = False
         logger.debug("Creating ChannelWidget: index=%d, is_midi=%s", channel_index, is_midi)
 
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -430,8 +433,11 @@ class ChannelWidget(QFrame):
         # ── Mute Button ────────────────────────────────────────────────
         self._mute_btn = QToolButton()
         self._mute_btn.setIcon(QIcon.fromTheme("audio-volume-high"))
-        self._mute_btn.setToolTip("Toggle mute.")
         self._mute_btn.clicked.connect(lambda checked=False: self._backend.toggle_mute(self._ch))
+        if is_windows():
+            self._mute_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self._mute_btn.customContextMenuRequested.connect(self._on_mute_context_menu)
+        self._refresh_mute_tooltip()
 
         # ── Level label ────────────────────────────────────────────────
         self._level_label = QLabel("—")
@@ -815,7 +821,10 @@ class ChannelWidget(QFrame):
         return self.is_waiting_for_volume_learn() or self.is_waiting_for_mute_learn()
 
     def cancel_learn(self) -> None:
-        """Cancel any active MIDI learn without assigning a CC."""
+        """Cancel any active MIDI / mute-hotkey learn without assigning."""
+        if self._mute_hotkey_learning:
+            self._mute_hotkey_learning = False
+            self._refresh_mute_tooltip()
         if not self.is_midi_channel:
             return
         if self._learn_btn.isChecked():
@@ -879,8 +888,44 @@ class ChannelWidget(QFrame):
             self._mute_btn.setIcon(QIcon.fromTheme("audio-volume-high"))
             self._slider.setEnabled(True)
 
+    def _refresh_mute_tooltip(self) -> None:
+        if self._mute_hotkey_learning:
+            self._mute_btn.setToolTip("Press a key for mute hotkey… (Esc cancels)")
+            return
+        lines = ["Toggle mute."]
+        if is_windows():
+            lines.append("Right-click to learn a Windows hotkey.")
+            hk = self._config.get_mute_hotkey(self._ch)
+            if hk:
+                lines.append(f"Hotkey: {hk}")
+        self._mute_btn.setToolTip("\n".join(lines))
+
+    @_slot_guard
+    def _on_mute_context_menu(self, pos) -> None:
+        if not is_windows():
+            return
+        menu = QMenu(self)
+        learn = menu.addAction("Learn hotkey…")
+        clear = menu.addAction("Clear hotkey")
+        clear.setEnabled(bool(self._config.get_mute_hotkey(self._ch)))
+        chosen = menu.exec(self._mute_btn.mapToGlobal(pos))
+        if chosen is learn:
+            self._mute_hotkey_learning = True
+            self._refresh_mute_tooltip()
+            self.mute_hotkey_learn_requested.emit(self._ch)
+        elif chosen is clear:
+            self._config.set_mute_hotkey(self._ch, None)
+            self._mute_hotkey_learning = False
+            self._refresh_mute_tooltip()
+            self.mute_hotkey_changed.emit()
+
+    def set_mute_hotkey_learning(self, active: bool) -> None:
+        self._mute_hotkey_learning = bool(active)
+        self._refresh_mute_tooltip()
+
     def refresh(self) -> None:
         self._refresh_app_list()
+        self._refresh_mute_tooltip()
 
     def update_settings(self) -> None:
         self._invert_cb.setVisible(self._config.show_invert_option)
@@ -1344,6 +1389,7 @@ class MainWindow(QMainWindow):
         self._drag_source: ChannelWidget | None = None
         self._live_insert_at: int | None = None
         self._layout_detached = False
+        self._mute_hotkeys = None
 
         # Guard: set True while a show() is in flight to suppress spurious hide.
         self._show_requested: bool = False
@@ -1597,6 +1643,9 @@ class MainWindow(QMainWindow):
                 w.strip_drop.connect(self._on_strip_drop)
                 w.reorder_tracking.connect(self._on_reorder_tracking)
                 w.reorder_active_changed.connect(lambda active, ww=w: self._on_reorder_session(active, ww))
+                if is_windows():
+                    w.mute_hotkey_learn_requested.connect(self._on_mute_hotkey_learn_requested)
+                    w.mute_hotkey_changed.connect(self._rebuild_mute_hotkeys)
                 self._channels.append(w)
                 # Ensure MIDI-relevant signals are connected even after rebuild
                 if w.is_midi_channel and self._midi:
@@ -1616,6 +1665,45 @@ class MainWindow(QMainWindow):
         finally:
             self._ch_layout.setEnabled(True)
             self._ch_layout.update()
+        if is_windows():
+            self._rebuild_mute_hotkeys()
+
+    def set_mute_hotkey_manager(self, manager) -> None:
+        """Attach Windows MuteHotkeyManager (no-op if None)."""
+        self._mute_hotkeys = manager
+
+    def _rebuild_mute_hotkeys(self) -> None:
+        mgr = getattr(self, "_mute_hotkeys", None)
+        if mgr is None:
+            return
+        mgr.rebuild(self._config.get_all_mute_hotkeys())
+        for w in self._channels:
+            w._refresh_mute_tooltip()
+
+    @_slot_guard
+    def _on_mute_hotkey_learn_requested(self, channel: int) -> None:
+        mgr = getattr(self, "_mute_hotkeys", None)
+        if mgr is None:
+            return
+        for w in self._channels:
+            w.set_mute_hotkey_learning(w.channel_index == channel)
+        mgr.start_learn(channel)
+
+    @_slot_guard
+    def _on_mute_hotkey_learned(self, channel: int, hotkey: str) -> None:
+        self._config.set_mute_hotkey(channel, hotkey)
+        for w in self._channels:
+            w.set_mute_hotkey_learning(False)
+        self._rebuild_mute_hotkeys()
+        logger.info("Mute hotkey learned: ch %d → %s", channel, hotkey)
+
+    @_slot_guard
+    def _on_mute_hotkey_learn_cancelled(self, channel: int) -> None:
+        for w in self._channels:
+            if w.channel_index == channel:
+                w.set_mute_hotkey_learning(False)
+            else:
+                w.set_mute_hotkey_learning(False)
 
     def _channel_widget(self, channel_index: int) -> ChannelWidget | None:
         """Return the strip widget for a stable channel id (not display slot)."""
@@ -2493,6 +2581,9 @@ class MainWindow(QMainWindow):
 
     def keyPressEvent(self, event) -> None:
         if event.key() == Qt.Key.Key_Escape:
+            mgr = getattr(self, "_mute_hotkeys", None)
+            if mgr is not None and mgr.is_learning:
+                mgr.cancel_learn()
             for ch in self._channels:
                 ch.cancel_learn()
         super().keyPressEvent(event)
