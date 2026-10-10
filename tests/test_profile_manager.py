@@ -11,10 +11,12 @@ from conftest import make_profile, write_profile  # noqa: E402
 
 def _make_manager(profiles_dir: Path):
     from nativmix.utils.profile_manager import ProfileManager
+
     return ProfileManager(profiles_dir=profiles_dir)
 
 
 # ── list_profiles ────────────────────────────────────────────────────────────
+
 
 def test_list_profiles_empty(qtbot, tmp_profiles_dir):
     pm = _make_manager(tmp_profiles_dir)
@@ -31,6 +33,7 @@ def test_list_profiles_returns_sorted(qtbot, tmp_profiles_dir):
 
 # ── load ─────────────────────────────────────────────────────────────────────
 
+
 def test_load_returns_profile_dict(qtbot, tmp_profiles_dir):
     write_profile(tmp_profiles_dir, make_profile("profile-1", channel_count=7))
     pm = _make_manager(tmp_profiles_dir)
@@ -46,6 +49,7 @@ def test_load_missing_raises(qtbot, tmp_profiles_dir):
 
 
 # ── create ────────────────────────────────────────────────────────────────────
+
 
 def test_create_returns_new_id(qtbot, tmp_profiles_dir):
     pm = _make_manager(tmp_profiles_dir)
@@ -74,6 +78,7 @@ def test_create_profile_has_correct_fields(qtbot, tmp_profiles_dir):
 
 # ── rename ────────────────────────────────────────────────────────────────────
 
+
 def test_rename_updates_name(qtbot, tmp_profiles_dir):
     write_profile(tmp_profiles_dir, make_profile("profile-1", "Old"))
     pm = _make_manager(tmp_profiles_dir)
@@ -82,6 +87,7 @@ def test_rename_updates_name(qtbot, tmp_profiles_dir):
 
 
 # ── delete ────────────────────────────────────────────────────────────────────
+
 
 def test_delete_removes_file(qtbot, tmp_profiles_dir):
     write_profile(tmp_profiles_dir, make_profile("profile-1"))
@@ -100,6 +106,7 @@ def test_delete_last_profile_raises(qtbot, tmp_profiles_dir):
 
 # ── save_current ──────────────────────────────────────────────────────────────
 
+
 def test_save_current_updates_channels(qtbot, tmp_profiles_dir):
     write_profile(tmp_profiles_dir, make_profile("profile-1", channel_count=2))
     pm = _make_manager(tmp_profiles_dir)
@@ -111,7 +118,21 @@ def test_save_current_updates_channels(qtbot, tmp_profiles_dir):
     assert reloaded["channels"][0]["app_names"] == ["spotify"]
 
 
+def test_save_current_persists_channel_label(qtbot, tmp_profiles_dir):
+    from nativmix.utils.profile_manager import ProfileManager, default_channels
+
+    pm = ProfileManager(profiles_dir=tmp_profiles_dir)
+    pid = pm.create("Label Test", channel_count=2)
+    pm.switch(pid)
+    channels = default_channels(2)
+    channels[0]["label"] = "Kick"
+    pm.save_current(channels)
+    loaded = pm.load(pid)
+    assert loaded["channels"][0]["label"] == "Kick"
+
+
 # ── switch ────────────────────────────────────────────────────────────────────
+
 
 def test_switch_sets_active_id(qtbot, tmp_profiles_dir):
     write_profile(tmp_profiles_dir, make_profile("profile-1"))
@@ -140,6 +161,7 @@ def test_switch_prev_wraps(qtbot, tmp_profiles_dir):
 
 # ── ensure_profile_for_hw ─────────────────────────────────────────────────────
 
+
 def test_ensure_hw_no_new_profile_when_hw_bigger(qtbot, tmp_profiles_dir):
     write_profile(tmp_profiles_dir, make_profile("profile-1", channel_count=5))
     pm = _make_manager(tmp_profiles_dir)
@@ -161,6 +183,7 @@ def test_ensure_hw_creates_profile_when_hw_smaller(qtbot, tmp_profiles_dir):
 
 
 # ── Signal emissions ──────────────────────────────────────────────────────────
+
 
 def test_switch_emits_profile_changed(pm, qtbot):
     pm.create("Second", 7)

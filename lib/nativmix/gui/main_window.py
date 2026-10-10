@@ -844,6 +844,9 @@ class ChannelWidget(QFrame):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self._config.remove_midi_channel(self._ch)
+            persist = getattr(self.window(), "persist_active_profile_channels", None)
+            if callable(persist):
+                persist()
 
     # ------------------------------------------------------------------
     # Public API
@@ -1303,8 +1306,13 @@ class ChannelWidget(QFrame):
 
     def _on_rename(self, new_name: str) -> None:
         self._config.set_channel_label(self._ch, new_name)
-        self._config.save()
         self._ch_label.setText(new_name)
+        persist = getattr(self.window(), "persist_active_profile_channels", None)
+        if callable(persist):
+            persist()
+        else:
+            self._config.save()
+            logger.warning("Channel rename: no ProfileManager on window; label may not persist")
 
     # ------------------------------------------------------------------
     # Inversion
@@ -1907,8 +1915,7 @@ class MainWindow(QMainWindow):
         if new_order == full:
             return
         self._config.set_channel_order(new_order)
-        if self._profile_manager is not None:
-            self._profile_manager.save_current(self._config.all_channels(), self._config.get_channel_order())
+        self.persist_active_profile_channels()
         self._stop_live_anim()
         self._animate_channel_reorder(visual)
 
@@ -2306,6 +2313,7 @@ class MainWindow(QMainWindow):
     @_slot_guard
     def _on_add_midi_clicked(self, checked: bool = False) -> None:
         self._config.add_midi_channel()
+        self.persist_active_profile_channels()
         # The add_midi_channel method emits settings_changed, which triggers _on_settings_updated,
         # which detects the length difference and rebuilds.
 
@@ -2319,6 +2327,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Profile selector helpers
     # ------------------------------------------------------------------
+
+    def persist_active_profile_channels(self) -> None:
+        """Write in-memory channel data (labels, mappings, order) to the active profile."""
+        if self._profile_manager is not None:
+            self._profile_manager.save_current(
+                self._config.all_channels(),
+                self._config.get_channel_order(),
+            )
 
     def _populate_profile_combo(self) -> None:
         """Rebuild the profile combo from ProfileManager (blocks signals to avoid loops)."""
@@ -2378,7 +2394,7 @@ class MainWindow(QMainWindow):
         if self._profile_manager is None:
             return
         # Flush any pending changes to the current profile before copying
-        self._profile_manager.save_current(self._config.all_channels(), self._config.get_channel_order())
+        self.persist_active_profile_channels()
         names = {p["name"] for p in self._profile_manager.list_profiles()}
         n = len(names) + 1
         candidate = f"Profile {n}"
