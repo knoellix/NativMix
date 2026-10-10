@@ -396,8 +396,8 @@ class ChannelWidget(QFrame):
 
     Contains (top → bottom):
       level label → slider → CH number → separator →
-      mode switch → app list (with × buttons)/hw display →
-      + App / + Gerät button → Toggles (Invert/VSink)
+      app list (with × buttons)/hw display →
+      Targets button → Toggles (Invert/VSink)
     """
 
     strip_drop = pyqtSignal(int, object)  # source_id, global QPoint
@@ -488,11 +488,6 @@ class ChannelWidget(QFrame):
         self._sep.reorder_active_changed.connect(self.reorder_active_changed.emit)
         self._update_drag_handle_cursor()
 
-        # ── Mode Switch ────────────────────────────────────────────────
-        self._mode_cb = QCheckBox("Device")
-        self._mode_cb.setToolTip("Toggle between App Mode and Hardware Mode.")
-        self._mode_cb.clicked.connect(self._on_mode_toggled)
-
         # ── App list / HW Selection display ────────────────────────────
         self._app_list_widget = QWidget()
         self._app_list_widget.setObjectName("app_list_widget")
@@ -509,8 +504,9 @@ class ChannelWidget(QFrame):
         self._app_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._app_list_scroll.setWidget(self._app_list_widget)
 
-        # ── Add-stream / Add-HW button ─────────────────────────────────
-        self._add_btn = QPushButton()
+        # ── Targets (apps / hardware / crossfader control) ─────────────
+        self._add_btn = QPushButton("Targets")
+        self._add_btn.setToolTip("Assign apps, hardware, or crossfader control.")
         self._add_btn.clicked.connect(self._open_picker)
 
         # ── Toggle Controls ────────────────────────────────────────────
@@ -537,14 +533,8 @@ class ChannelWidget(QFrame):
         self._vsink_cb.setSizePolicy(sp_vsink)
         self._vsink_cb.toggled.connect(self._on_vsink_toggled)
 
-        self._toggles_layout.addWidget(self._mode_cb)
         self._toggles_layout.addWidget(self._vsink_cb)
         self._toggles_layout.addWidget(self._invert_cb)
-
-        # Initialize Mode UI State
-        is_hw = self._config.get_channel_mode(self._ch) == "hardware"
-        self._mode_cb.setChecked(is_hw)
-        self._apply_mode_ui(is_hw)
 
         # ── Setup size policies for consistency ───────────────────────
         # We always want the app list and toggles to exist so columns align.
@@ -768,7 +758,6 @@ class ChannelWidget(QFrame):
                     item.widget().setVisible(False)
         else:
             # Restore proper visibility — invert respects its setting
-            self._mode_cb.setVisible(True)
             self._vsink_cb.setVisible(True)
             self._invert_cb.setVisible(self._config.show_invert_option)
         if self.is_midi_channel and compact:
@@ -799,37 +788,6 @@ class ChannelWidget(QFrame):
         if self._compact:
             return
         self.strip_drop.emit(self._ch, global_pos)
-
-    def contextMenuEvent(self, event) -> None:
-        """Right-click menu: A/B crossfader group + USB control assignment.
-
-        Only shown while the crossfader feature is enabled; otherwise fall back
-        to the default handling so nothing changes for users who never enable it.
-        """
-        if not self._config.get_crossfader_enabled():
-            super().contextMenuEvent(event)
-            return
-        menu = QMenu(self)
-        is_control = self._config.get_crossfader_usb_channel_index() == self._ch
-        if is_control:
-            clear = menu.addAction("Clear crossfader control")
-            clear.triggered.connect(lambda _checked=False: self._clear_crossfader_control())
-        else:
-            side_menu = menu.addMenu("Crossfader group")
-            current = self._config.get_cross_side(self._ch)
-            for key, text in (("none", "None"), ("a", "A"), ("b", "B")):
-                act = side_menu.addAction(text)
-                act.setCheckable(True)
-                act.setChecked(current == key)
-                act.triggered.connect(lambda _checked=False, k=key: self._set_cross_side(k))
-            # Only a USB (non-MIDI) strip may become the physical control fader.
-            if not self.is_midi_channel:
-                menu.addSeparator()
-                ctrl_act = menu.addAction("Set as crossfader control")
-                ctrl_act.triggered.connect(lambda _checked=False: self._set_as_crossfader_control())
-        # Keep a reference so the non-blocking popup is not garbage-collected.
-        self._cross_menu = menu
-        menu.popup(event.globalPos())
 
     @_slot_guard
     def _set_cross_side(self, side: str) -> None:
@@ -863,13 +821,11 @@ class ChannelWidget(QFrame):
             self._slider.setEnabled(False)
             self._level_label.setText("XF")
             self._add_btn.setEnabled(False)
-            self._mode_cb.setEnabled(False)
             self._vsink_cb.setEnabled(False)
             self.setToolTip("Crossfader control channel — the poti drives the A/B crossfader.")
         else:
             self._slider.setEnabled(True)
             self._add_btn.setEnabled(True)
-            self._mode_cb.setEnabled(True)
             self._vsink_cb.setEnabled(True)
             self.setToolTip("")
             # Restore the real (base) volume display.
@@ -1184,47 +1140,56 @@ class ChannelWidget(QFrame):
         self._refresh_app_list()
 
     # ------------------------------------------------------------------
-    # Mode Switching
+    # Channel mode (via Targets picks, not a separate toggle)
     # ------------------------------------------------------------------
 
-    @pyqtSlot(bool)
-    @_slot_guard
-    def _on_mode_toggled(self, checked: bool) -> None:
-        mode = "hardware" if checked else "app"
-        self._config.set_channel_mode(self._ch, mode)
-
-        # When switching, flush the old assignments to prevent background routing
-        if mode == "hardware":
-            self._config.set_app_names(self._ch, [])
-            if self._config.is_v_sink_enabled(self._ch):
-                self._vsink_cb.setChecked(False)  # Disables the V-Sink
-        else:
-            self._config.set_hardware_id(self._ch, None)
-
+    def _ensure_app_mode(self) -> None:
+        if self._config.get_channel_mode(self._ch) == "app":
+            return
+        self._config.set_channel_mode(self._ch, "app")
+        self._config.set_hardware_id(self._ch, None)
         self._config.save()
-        self._apply_mode_ui(checked)
-        self._refresh_app_list()
 
-    def _apply_mode_ui(self, is_hw: bool) -> None:
-        if is_hw:
-            self._add_btn.setText("+ Device")
-            self._add_btn.setToolTip("Assign hardware input/output.")
-        else:
-            self._add_btn.setText("+ App")
-            self._add_btn.setToolTip("Assign audio stream.")
-        # V-Sink visibility is handled by _refresh_app_list called after this
+    def _ensure_hardware_mode(self) -> None:
+        if self._config.get_channel_mode(self._ch) == "hardware":
+            return
+        self._config.set_channel_mode(self._ch, "hardware")
+        self._config.set_app_names(self._ch, [])
+        if self._config.is_v_sink_enabled(self._ch):
+            self._vsink_cb.setChecked(False)  # Disables the V-Sink
+        self._config.save()
 
     # ------------------------------------------------------------------
-    # Stream / Hardware picker
+    # Targets menu (apps + hardware + crossfader control)
     # ------------------------------------------------------------------
+
+    def _picker_popup_pos(self) -> QPoint:
+        return self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft())
 
     def _open_picker(self, checked: bool = False) -> None:
-        if self._config.get_channel_mode(self._ch) == "hardware":
-            self._open_hw_picker()
-        else:
-            self._open_stream_picker()
+        menu = QMenu(self)
+        apps_header = menu.addAction("Apps")
+        apps_header.setEnabled(False)
+        self._populate_app_picker_menu(menu)
 
-    def _open_hw_picker(self) -> None:
+        hw_menu = menu.addMenu("Hardware")
+        self._populate_hw_picker_menu(hw_menu)
+
+        if self._config.get_crossfader_enabled() and not self.is_midi_channel:
+            menu.addSeparator()
+            is_control = self._config.get_crossfader_usb_channel_index() == self._ch
+            if is_control:
+                clear = menu.addAction("Clear crossfader control")
+                clear.triggered.connect(lambda _checked=False: self._clear_crossfader_control())
+            else:
+                ctrl = menu.addAction("Use this fader as crossfader control")
+                ctrl.setCheckable(True)
+                ctrl.triggered.connect(lambda _checked=False: self._set_as_crossfader_control())
+
+        self._targets_menu = menu
+        menu.exec(self._picker_popup_pos())
+
+    def _populate_hw_picker_menu(self, menu: QMenu) -> None:
         sinks = self._backend.get_real_sinks()
         sources = self._backend.get_real_sources()
 
@@ -1236,8 +1201,6 @@ class ChannelWidget(QFrame):
                 val = self._config.get_hardware_id(i)
                 if val:
                     assigned_elsewhere.add(val)
-
-        menu = QMenu(self)
 
         # Outputs
         if sinks:
@@ -1277,9 +1240,8 @@ class ChannelWidget(QFrame):
             a = menu.addAction("No hardware found")
             a.setEnabled(False)
 
-        menu.exec(self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft()))
-
     def _on_hw_picked(self, hw_id: str) -> None:
+        self._ensure_hardware_mode()
         current = self._config.get_hardware_id(self._ch)
         if hw_id == current:
             self._config.set_hardware_id(self._ch, None)
@@ -1288,37 +1250,28 @@ class ChannelWidget(QFrame):
         self._config.save()
         self._refresh_app_list()
 
-    def _open_stream_picker(self) -> None:
+    def _populate_app_picker_menu(self, menu: QMenu) -> None:
         streams = self._backend.get_active_streams()
 
-        # Determine which apps are assigned elsewhere, and which are here
         already_here = set(self._config.get_app_names(self._ch))
         assigned_elsewhere = set()
         for i in range(self._config.num_channels):
             if i != self._ch:
                 assigned_elsewhere.update(self._config.get_app_names(i))
 
-        menu = QMenu(self)
-
-        # Build list of candidate app names from active streams.
-        # Track which names come from anonymous streams (pid=0, generic name)
-        # so we can show a hint in the menu — the real name is still used for mapping.
         candidates: set[str] = set()
         anonymous_names: set[str] = set()
         for s in streams:
             name = s.app_name
-            # Global filter: ignore internal pulse/speech-dispatcher streams
             if "speech-dispatcher" in name.lower() or "dummy" in name.lower():
                 continue
             candidates.add(name)
             if s.pid == 0 and name.lower() in GENERIC_PA_NAMES:
                 anonymous_names.add(name)
 
-        # Always offer the special pseudo-apps
         candidates.add("System Master")
         candidates.add("Other Apps")
 
-        # Sort: Special apps first, then alphabetically
         def sort_key(name: str) -> tuple[int, str]:
             if name == "System Master":
                 return (0, name)
@@ -1328,7 +1281,6 @@ class ChannelWidget(QFrame):
 
         added_actions = 0
         for name in sorted(candidates, key=sort_key):
-            # Exclusivity: skip if assigned to another channel
             if name in assigned_elsewhere:
                 continue
 
@@ -1355,14 +1307,13 @@ class ChannelWidget(QFrame):
         type_action = menu.addAction("✏  Enter app name…")
         type_action.triggered.connect(self._open_manual_app_input)
 
-        menu.exec(self._add_btn.mapToGlobal(self._add_btn.rect().bottomLeft()))
-
     def _open_manual_app_input(self, checked: bool = False) -> None:
         name, ok = QInputDialog.getText(self, "Pin App", "App name:")
         if ok and name.strip():
             self._on_stream_picked(name.strip())
 
     def _on_stream_picked(self, app_name: str) -> None:
+        self._ensure_app_mode()
         current = self._config.get_app_names(self._ch)
         try:
             if app_name in current:
@@ -1376,7 +1327,7 @@ class ChannelWidget(QFrame):
             _msg.setText(f"⚠  {e}")
             _msg.exec()
             # Re-open the picker so the user can choose a different app
-            self._open_stream_picker()
+            self._open_picker()
             return
 
         self._config.save()
