@@ -1476,15 +1476,34 @@ class ConfigManager(QObject):
     def set_crossfader_usb_channel_index(self, index: int | None) -> None:
         """Assign the USB control channel for the crossfader.
 
-        Forces the target channel's cross_side to 'none', clears its app
-        assignments, and resets mode/hardware/V-Sink to plain 'app' — a
-        control channel cannot also be an A/B side, carry regular app
-        mappings, or keep driving a previously assigned hardware/V-Sink
-        target with its raw poti position (volume apply skips this channel
-        entirely once it is the control index; this clears stale state so
-        nothing is left listening for a volume that will never come).
+        Only USB/hardware channel indices (``0 .. hw_channel_count-1``) are
+        valid, and only outside ``midi_only`` — MIDI drives the bar via Learn
+        on the crossfader itself, not via Targets.
+
+        Intentional multi-field side effect (exception to the usual
+        one-setter-one-field rule): forces the target channel's cross_side to
+        'none', clears its app assignments, and resets mode/hardware/V-Sink to
+        plain 'app'. A control channel cannot also be an A/B side, carry
+        regular app mappings, or keep driving a previously assigned
+        hardware/V-Sink target with its raw poti position (volume apply skips
+        this channel entirely once it is the control index; this clears stale
+        state so nothing is left listening for a volume that will never come).
         """
         normalized = int(index) if index is not None else None
+        if normalized is not None:
+            if self.input_mode == "midi_only":
+                logger.debug(
+                    "Ignoring crossfader USB control index %s in midi_only (use MIDI Learn)",
+                    normalized,
+                )
+                return
+            if normalized < 0 or normalized >= self.hw_channel_count:
+                logger.debug(
+                    "Ignoring crossfader USB control index %s (not a USB channel; hw_count=%d)",
+                    normalized,
+                    self.hw_channel_count,
+                )
+                return
         self._crossfader["crossfader_usb_channel_index"] = normalized
         if normalized is not None:
             ch = self._channel(normalized)

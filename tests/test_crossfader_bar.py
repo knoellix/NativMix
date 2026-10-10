@@ -66,7 +66,7 @@ def test_learning_hint(qapp):
 
 def test_set_control_name_placeholder_and_text(qapp):
     bar = CrossfaderBar()
-    assert bar._control_label.text() == "—"  # default placeholder
+    assert bar._control_label.text() == "—"
     bar.set_control_name("USB Fader")
     assert bar._control_label.text() == "USB Fader"
     bar.set_control_name("")

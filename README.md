@@ -115,6 +115,12 @@ flatpak run net.knoellix.NativMix
 
 ## Update History
 
+**v1.1.1**
+
+- Feat: A/B crossfader (base×gain, USB Targets control, MIDI Learn on bar) (#37)
+- UX: **+ App** → **Targets** (Apps + Hardware + USB crossfader control)
+- Fix: labels via profile `save_current` (#38); MIDI trailing CC flush + master echo suppress (#39)
+
 **v1.1.0**
 
 - Milestone: Windows WASAPI considered stable — Other Apps, soft-apply mute, Appearance theme, mute hotkey learn (#32)

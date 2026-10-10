@@ -1,3 +1,12 @@
+nativmix (1.1.1) noble; urgency=medium
+
+  * Feat: A/B crossfader (base×gain, USB Targets control, MIDI Learn on bar) (#37)
+  * UX: + App replaced by Targets (Apps, Hardware, USB crossfader control)
+  * Fix: channel labels via profile save_current (#38)
+  * Fix: MIDI trailing CC flush + System Master echo suppress (#39)
+
+ -- Christian Möllmann <moellix@knoellix.net>  Sat, 10 Oct 2026 10:55:00 +0200
+
 nativmix (1.1.0) noble; urgency=medium
 
   * Milestone: Windows WASAPI considered stable (Other Apps, soft-apply, appearance, mute hotkeys)

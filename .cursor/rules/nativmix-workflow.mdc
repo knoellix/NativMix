@@ -5,6 +5,9 @@ alwaysApply: true
 
 # NativMix Workflow
 
+## New bugs / GitHub issues
+See `nativmix-issue-triage.mdc`: code first → plan → reply draft → then implement (platform-only fixes: prefer a test branch).
+
 ## Verification before commit
 - Run tests first: `pytest -q`.
 - Optional static checks when available: `ruff check lib/` and `mypy lib/`.

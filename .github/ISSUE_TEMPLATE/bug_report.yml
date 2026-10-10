@@ -13,7 +13,7 @@ body:
     attributes:
       label: NativMix Version
       description: Shown in the window title / About
-      placeholder: "e.g. 1.1.0"
+      placeholder: "e.g. 1.1.1"
     validations:
       required: true
 

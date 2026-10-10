@@ -423,6 +423,7 @@ class ChannelWidget(QFrame):
         self._compact = False
         self._drag_blocked = False
         self._mute_hotkey_learning = False
+        self._crossfader_control = False
         logger.debug("Creating ChannelWidget: index=%d, is_midi=%s", channel_index, is_midi)
 
         self.setFrameShape(QFrame.Shape.NoFrame)
@@ -431,7 +432,9 @@ class ChannelWidget(QFrame):
         self.setMinimumWidth(_CHANNEL_MIN_WIDTH)
         # Prevent the whole column from stretching infinitely if long text is loaded
         self.setMaximumWidth(_CHANNEL_MAX_WIDTH)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        # Preferred (not Expanding): extra window height must sit below the
+        # crossfader, not as empty padding under each strip's V-Sink row.
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
         # ── Mute Button ────────────────────────────────────────────────
         self._mute_btn = QToolButton()
@@ -504,27 +507,31 @@ class ChannelWidget(QFrame):
         self._app_list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._app_list_scroll.setWidget(self._app_list_widget)
 
-        # ── Targets (apps / hardware / crossfader control) ─────────────
+        # ── Targets (apps / hardware / USB crossfader control) ─────────
         self._add_btn = QPushButton("Targets")
-        self._add_btn.setToolTip("Assign apps, hardware, or crossfader control.")
+        self._add_btn.setToolTip(
+            "Assign apps or hardware. USB faders can also become the crossfader control; "
+            "MIDI uses Learn on the crossfader bar."
+        )
         self._add_btn.clicked.connect(self._open_picker)
 
         # ── Toggle Controls ────────────────────────────────────────────
         self._toggles_layout = QVBoxLayout()
-        self._toggles_layout.setContentsMargins(0, 4, 0, 0)
-        self._toggles_layout.setSpacing(4)
+        self._toggles_layout.setContentsMargins(0, 2, 0, 0)
+        self._toggles_layout.setSpacing(2)
 
-        # Invert checkbox
+        # Invert checkbox (above V-Sink — when hidden it must not reserve space
+        # *below* V-Sink, or the crossfader sits too far down).
         self._invert_cb = QCheckBox("Inv")
         self._invert_cb.setToolTip("Invert slider direction.")
         self._invert_cb.setChecked(self._config.get_effective_inversion(channel_index))
         sp_inv = self._invert_cb.sizePolicy()
-        sp_inv.setRetainSizeWhenHidden(True)
+        sp_inv.setRetainSizeWhenHidden(False)
         self._invert_cb.setSizePolicy(sp_inv)
         self._invert_cb.toggled.connect(self._on_invert_toggled)
         self._invert_cb.setVisible(self._config.show_invert_option)
 
-        # V-Sink checkbox
+        # V-Sink checkbox — last toggle so it sits flush above the crossfader.
         self._vsink_cb = QCheckBox("V-Sink")
         self._vsink_cb.setToolTip("Route audio through a virtual sink.")
         self._vsink_cb.setChecked(self._config.is_v_sink_enabled(channel_index))
@@ -533,8 +540,8 @@ class ChannelWidget(QFrame):
         self._vsink_cb.setSizePolicy(sp_vsink)
         self._vsink_cb.toggled.connect(self._on_vsink_toggled)
 
-        self._toggles_layout.addWidget(self._vsink_cb)
         self._toggles_layout.addWidget(self._invert_cb)
+        self._toggles_layout.addWidget(self._vsink_cb)
 
         # ── Setup size policies for consistency ───────────────────────
         # We always want the app list and toggles to exist so columns align.
@@ -549,7 +556,8 @@ class ChannelWidget(QFrame):
 
         # ── Root layout ────────────────────────────────────────────────
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(2, 4, 2, 4)
+        # Bottom margin 0 so the crossfader can sit flush under V-Sink.
+        layout.setContentsMargins(2, 4, 2, 0)
         layout.setSpacing(2)
 
         layout.addWidget(self._mute_btn, alignment=Qt.AlignmentFlag.AlignHCenter)
@@ -734,7 +742,7 @@ class ChannelWidget(QFrame):
             self.setMaximumWidth(_CHANNEL_MAX_WIDTH)
 
         # Tighten bottom margin in compact mode to remove empty space below separator
-        self.layout().setContentsMargins(2, 4, 2, 1 if compact else 4)
+        self.layout().setContentsMargins(2, 4, 2, 0)
 
         # Toggle RetainSizeWhenHidden so hidden widgets release their space
         for widget in (self._app_list_scroll, self._add_btn):
@@ -742,10 +750,9 @@ class ChannelWidget(QFrame):
             sp.setRetainSizeWhenHidden(not compact)
             widget.setSizePolicy(sp)
 
-        # _invert_cb has RetainSizeWhenHidden=True by default; toggle it so
-        # compact mode can actually shrink the layout.
+        # Invert never reserves space when hidden (would open a gap under V-Sink).
         sp_inv = self._invert_cb.sizePolicy()
-        sp_inv.setRetainSizeWhenHidden(not compact)
+        sp_inv.setRetainSizeWhenHidden(False)
         self._invert_cb.setSizePolicy(sp_inv)
 
         self._sep.setVisible(True)
@@ -791,6 +798,9 @@ class ChannelWidget(QFrame):
 
     @_slot_guard
     def _set_as_crossfader_control(self) -> None:
+        # Targets control assignment is USB-only; MIDI drives the bar via Learn.
+        if self.is_midi_channel or self._config.input_mode == "midi_only":
+            return
         self._config.set_crossfader_usb_channel_index(self._ch)
         self.cross_assignment_changed.emit()
 
@@ -799,32 +809,60 @@ class ChannelWidget(QFrame):
         self._config.set_crossfader_usb_channel_index(None)
         self.cross_assignment_changed.emit()
 
+    def _is_crossfader_control_strip(self) -> bool:
+        return self._config.get_crossfader_enabled() and self._config.get_crossfader_usb_channel_index() == self._ch
+
+    def _crossfader_dim_widgets(self) -> list:
+        """Everything on the strip except Targets (stays fully interactive)."""
+        widgets = [
+            self._mute_btn,
+            self._level_label,
+            self._slider,
+            self._ch_label,
+            self._sep,
+            self._app_list_scroll,
+            self._app_list_widget,
+            self._vsink_cb,
+            self._invert_cb,
+        ]
+        if self.is_midi_channel:
+            widgets.extend([self._learn_btn, self._mute_learn_btn, self._remove_midi_btn])
+        return widgets
+
     def apply_crossfader_role(self) -> None:
         """Freeze this strip as the USB crossfader control, or restore it.
 
-        The control strip shows a greyed, disabled fader (poti drives the bar,
-        not channel volume) and has no app assignment. All other strips keep
-        their normal behaviour. GUI faders never move with the crossfader.
+        The control strip is greyed/disabled except Targets (clear/reassign).
+        Poti drives the bar, not channel volume. GUI faders never move with
+        the crossfader.
         """
-        is_control = (
-            self._config.get_crossfader_enabled() and self._config.get_crossfader_usb_channel_index() == self._ch
-        )
+        is_control = self._is_crossfader_control_strip()
+        self._crossfader_control = is_control
+
         if is_control:
             self._slider.blockSignals(True)
             self._slider.setValue(0)
             self._slider.blockSignals(False)
-            self._slider.setEnabled(False)
             self._level_label.setText("XF")
-            self._add_btn.setEnabled(False)
-            self._vsink_cb.setEnabled(False)
             self.setToolTip("Crossfader control channel — the poti drives the A/B crossfader.")
         else:
-            self._slider.setEnabled(True)
-            self._add_btn.setEnabled(True)
-            self._vsink_cb.setEnabled(True)
             self.setToolTip("")
-            # Restore the real (base) volume display.
             self.set_volume(self._config.get_channel_volume(self._ch))
+
+        for w in self._crossfader_dim_widgets():
+            w.setEnabled(not is_control)
+            if is_control:
+                fx = w.graphicsEffect()
+                if not isinstance(fx, QGraphicsOpacityEffect):
+                    fx = QGraphicsOpacityEffect(w)
+                    w.setGraphicsEffect(fx)
+                fx.setOpacity(0.4)
+            else:
+                w.setGraphicsEffect(None)
+
+        # Targets stays fully interactive and undimmed.
+        self._add_btn.setEnabled(True)
+        self._add_btn.setGraphicsEffect(None)
 
     @property
     def channel_index(self) -> int:
@@ -918,7 +956,8 @@ class ChannelWidget(QFrame):
             self._slider.setEnabled(False)
         else:
             self._mute_btn.setIcon(QIcon.fromTheme("audio-volume-high"))
-            self._slider.setEnabled(True)
+            # Crossfader-control strips keep the fader frozen/greyed.
+            self._slider.setEnabled(not getattr(self, "_crossfader_control", False))
 
     def _refresh_mute_tooltip(self) -> None:
         if self._mute_hotkey_learning:
@@ -1088,6 +1127,13 @@ class ChannelWidget(QFrame):
         is_hw = self._config.get_channel_mode(self._ch) == "hardware"
         self._vsink_cb.setVisible(not has_special and not is_hw and not is_windows())
 
+        # App-list growth/shrink changes strip height — keep the channel scroll
+        # pinned to content so empty viewport space does not reappear.
+        win = self.window()
+        fit = getattr(win, "_fit_channel_scroll_height", None)
+        if callable(fit):
+            QTimer.singleShot(0, fit)
+
     @pyqtSlot(str, bool)
     @_slot_guard
     def _on_app_routing_pause_toggled(self, app_name: str, paused: bool) -> None:
@@ -1170,7 +1216,12 @@ class ChannelWidget(QFrame):
         hw_menu = menu.addMenu("Hardware")
         self._populate_hw_picker_menu(hw_menu)
 
-        if self._config.get_crossfader_enabled() and not self.is_midi_channel:
+        # USB/hybrid only: MIDI channels learn the crossfader via the bar.
+        if (
+            self._config.get_crossfader_enabled()
+            and self._config.input_mode in ("usb", "hybrid")
+            and not self.is_midi_channel
+        ):
             menu.addSeparator()
             is_control = self._config.get_crossfader_usb_channel_index() == self._ch
             if is_control:
@@ -1428,6 +1479,10 @@ class MainWindow(QMainWindow):
         self._layout_detached = False
         self._mute_hotkeys = None
         self._crossfader_midi_learning = False
+        # After a Learn capture, the same midi_cc_received delivery still
+        # reaches on_midi_cc_for_crossfader — absorb that one tick so the
+        # newly bound CC does not also jump the crossfader position.
+        self._crossfader_learn_absorb_cc = False
 
         # Debounce crossfader-position persistence so dragging the bar (or a
         # fast poti/CC sweep) doesn't rewrite the profile JSON on every tick.
@@ -1553,12 +1608,17 @@ class MainWindow(QMainWindow):
         root.addWidget(self.settings_panel)
 
         # ── Scrollable channel area ────────────────────────────────────
+        # Vertical Preferred so the scroll only claims strip height; leftover
+        # window height goes to the stretch below the crossfader (not a gap
+        # between V-Sink and the A/B bar).
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.viewport().setAutoFillBackground(False)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._ch_scroll = scroll
 
         container = QWidget()
         container.setObjectName("channels_container")
@@ -1567,7 +1627,7 @@ class MainWindow(QMainWindow):
         self._ch_layout = QHBoxLayout(container)
         self._ch_layout.setContentsMargins(0, 0, 0, 0)
         self._ch_layout.setSpacing(6)
-        self._ch_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._ch_layout.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
 
         # Insert marker drawn in the gap between strips (not on card edges).
         self._drop_gap = QFrame(container)
@@ -1576,9 +1636,8 @@ class MainWindow(QMainWindow):
         self._drop_gap.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         scroll.setWidget(container)
-        root.addWidget(scroll)
 
-        # ── Crossfader row (below channel scroll, above the bottom bar) ──
+        # ── Crossfader row (tight under channel strips / V-Sink) ────────
         from nativmix.gui.crossfader_bar import CrossfaderBar
 
         self._crossfader_bar = CrossfaderBar()
@@ -1588,15 +1647,35 @@ class MainWindow(QMainWindow):
         self._crossfader_bar.side_assignment_toggled.connect(self._on_crossfader_side_assignment_toggled)
         self._crossfader_bar.setVisible(False)
 
-        # Center the bar under the channel strips instead of stretching it
-        # full-width: wrap it in its own row with stretch on both sides.
+        # Host is as wide as the channel strip group and left-aligned with it;
+        # the bar is centered *inside* that host (not relative to the window).
+        self._crossfader_host = QWidget()
+        self._crossfader_host.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        host_layout = QHBoxLayout(self._crossfader_host)
+        host_layout.setContentsMargins(0, 0, 0, 0)
+        host_layout.setSpacing(0)
+        host_layout.addStretch(1)
+        host_layout.addWidget(self._crossfader_bar)
+        host_layout.addStretch(1)
+
         self._crossfader_row = QWidget()
+        self._crossfader_row.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._crossfader_row.setVisible(False)
         xf_row = QHBoxLayout(self._crossfader_row)
         xf_row.setContentsMargins(0, 0, 0, 0)
+        xf_row.setSpacing(0)
+        xf_row.addWidget(self._crossfader_host, alignment=Qt.AlignmentFlag.AlignLeft)
         xf_row.addStretch(1)
-        xf_row.addWidget(self._crossfader_bar)
-        xf_row.addStretch(1)
-        root.addWidget(self._crossfader_row)
+
+        # One mixer block: strips + crossfader with zero gap, then window stretch below.
+        mixer = QWidget()
+        mixer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        mixer_layout = QVBoxLayout(mixer)
+        mixer_layout.setContentsMargins(0, 0, 0, 0)
+        mixer_layout.setSpacing(0)
+        mixer_layout.addWidget(scroll)
+        mixer_layout.addWidget(self._crossfader_row)
+        root.addWidget(mixer, stretch=0)
 
         # ── Add MIDI Channel Button ──
         self._add_midi_btn = QPushButton("+ Add MIDI Channel")
@@ -1620,7 +1699,10 @@ class MainWindow(QMainWindow):
         bottom_layout.addStretch()
         self._size_grip = QSizeGrip(self)
         bottom_layout.addWidget(self._size_grip, alignment=Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
-        root.addLayout(bottom_layout)
+        root.addLayout(bottom_layout, stretch=0)
+        # Absorb extra window height below the mixer block so the A/B bar
+        # stays directly under the V-Sink row when the window is tall.
+        root.addStretch(1)
 
         # ── Build initial channels ─────────────────────────────────────
         self._rebuild_channels()
@@ -1741,6 +1823,7 @@ class MainWindow(QMainWindow):
             self._ch_layout.setEnabled(True)
             self._ch_layout.update()
         self._update_crossfader_bar_width()
+        QTimer.singleShot(0, self._update_crossfader_bar_width)
         if is_windows():
             self._rebuild_mute_hotkeys()
 
@@ -2082,6 +2165,18 @@ class MainWindow(QMainWindow):
         if widget is not None:
             widget.set_volume(volume)
 
+    @pyqtSlot(list)
+    @_slot_guard
+    def on_midi_volumes_changed(self, mappings: list) -> None:
+        """MIDI CC volume batch → slider visuals (GUI thread via AutoConnection)."""
+        control_idx = self._config.get_crossfader_usb_channel_index() if self._config.get_crossfader_enabled() else None
+        for ch, vol in mappings:
+            if ch == control_idx:
+                continue
+            widget = self._channel_widget(int(ch))
+            if widget is not None:
+                widget.set_volume(float(vol))
+
     @pyqtSlot(bool)
     @_slot_guard
     def on_midi_connection_changed(self, connected: bool) -> None:
@@ -2106,6 +2201,7 @@ class MainWindow(QMainWindow):
         if self._crossfader_midi_learning:
             self._config.set_crossfader_midi_binding(control_number, midi_channel=midi_channel)
             self._crossfader_midi_learning = False
+            self._crossfader_learn_absorb_cc = True
             self._crossfader_bar.set_learning(False)
             self._crossfader_bar.set_midi_label(control_number, midi_channel)
             self.persist_active_profile_channels()
@@ -2161,6 +2257,9 @@ class MainWindow(QMainWindow):
         because this touches GUI state and re-applies gains via
         apply_crossfader_position_external().
         """
+        if self._crossfader_learn_absorb_cc:
+            self._crossfader_learn_absorb_cc = False
+            return
         if self.is_crossfader_learning() or not self._config.get_crossfader_enabled():
             return
         bound_cc, bound_ch = self._config.get_crossfader_midi_binding()
@@ -2225,6 +2324,7 @@ class MainWindow(QMainWindow):
             _midi_mode = self._config.input_mode in ("hybrid", "midi_only")
             self._add_midi_btn.setVisible(_midi_mode and not checked)
             self._edit_midi_btn.setVisible(_midi_mode and not checked)
+        QTimer.singleShot(0, self._update_crossfader_bar_width)
         if checked:
             # Tighten margins and spacing in compact mode; hide grip to save space
             self._root_layout.setContentsMargins(8, 8, 8, 2)
@@ -2350,6 +2450,9 @@ class MainWindow(QMainWindow):
         # 2. USB specific logic
         if mode == "midi_only":
             self._config.clear_usb_channel_mappings()
+            # Targets USB-control is meaningless without USB faders; MIDI uses Learn.
+            if self._config.get_crossfader_usb_channel_index() is not None:
+                self._config.set_crossfader_usb_channel_index(None)
             if self._arduino and self._arduino.isRunning():
                 # We don't stop the arduino thread (discovery), but backend blocks it.
                 pass
@@ -2450,6 +2553,7 @@ class MainWindow(QMainWindow):
         self._crossfader_bar.set_midi_edit_mode(checked)
         if not checked:
             self._crossfader_midi_learning = False
+            self._crossfader_learn_absorb_cc = False
             self._crossfader_bar.set_learning(False)
 
     # ------------------------------------------------------------------
@@ -2479,6 +2583,7 @@ class MainWindow(QMainWindow):
             return
         enabled = self._config.get_crossfader_enabled()
         self._crossfader_bar.setVisible(enabled)
+        self._crossfader_row.setVisible(enabled)
         self._crossfader_bar.set_position(self._config.get_crossfader_position())
         cc, midi_ch = self._config.get_crossfader_midi_binding()
         self._crossfader_bar.set_midi_label(cc, midi_ch)
@@ -2505,14 +2610,33 @@ class MainWindow(QMainWindow):
         return f"CH {index + 1}"
 
     def _crossfader_side_menu_model(self) -> list[tuple[int, str, str]]:
-        """Build (index, display_name, cross_side) rows for the bar's A/B menus."""
+        """Build A/B menu rows from *visible* strips only (same as the mixer).
+
+        USB mode hides MIDI strips in `_rebuild_channels`; the A/B menus must
+        follow that list so stale MIDI N entries do not appear.
+        """
         return [
-            (idx, self._channel_display_name(idx), self._config.get_cross_side(idx))
-            for idx in self._config.get_channel_order()
+            (
+                w.channel_index,
+                self._channel_display_name(w.channel_index),
+                self._config.get_cross_side(w.channel_index),
+            )
+            for w in self._channels
         ]
 
+    def _fit_channel_scroll_height(self) -> None:
+        """Pin the channel scroll area to strip content height (no empty viewport)."""
+        if not hasattr(self, "_ch_scroll") or not self._channels:
+            return
+        h = max(ch.sizeHint().height() for ch in self._channels)
+        h += self._ch_scroll.frameWidth() * 2
+        hbar = self._ch_scroll.horizontalScrollBar()
+        if hbar is not None and hbar.isVisible():
+            h += hbar.sizeHint().height()
+        self._ch_scroll.setFixedHeight(max(1, h))
+
     def _update_crossfader_bar_width(self) -> None:
-        """Keep the bar's width aligned with the channel strips it sits under.
+        """Keep the bar width/centering aligned with the channel strip group.
 
         Recomputed after channel rebuilds (count/width can change), on window
         resize (strip width changes), and from `refresh_crossfader_ui()`.
@@ -2523,7 +2647,17 @@ class MainWindow(QMainWindow):
         strip_w = self._channels[0].width() if self._channels else _CHANNEL_MIN_WIDTH
         if strip_w <= 0:
             strip_w = _CHANNEL_MIN_WIDTH
-        self._crossfader_bar.setFixedWidth(crossfader_bar_width(n, strip_w))
+        bar_w = crossfader_bar_width(n, strip_w)
+        self._crossfader_bar.setFixedWidth(bar_w)
+
+        # Host spans the full strip group (left-aligned like the channels);
+        # the bar stays centered inside that host.
+        if hasattr(self, "_crossfader_host"):
+            spacing = self._ch_layout.spacing() if hasattr(self, "_ch_layout") else 6
+            block_w = n * strip_w + max(0, n - 1) * spacing if n else bar_w
+            self._crossfader_host.setFixedWidth(max(block_w, bar_w))
+
+        self._fit_channel_scroll_height()
 
     def is_crossfader_learning(self) -> bool:
         """True while the bar is waiting to capture a MIDI CC (gates CC → position)."""
@@ -2595,6 +2729,7 @@ class MainWindow(QMainWindow):
     def _on_crossfader_clear_requested(self) -> None:
         """Clear the bar's MIDI binding (right-click → Clear MIDI)."""
         self._crossfader_midi_learning = False
+        self._crossfader_learn_absorb_cc = False
         self._config.set_crossfader_midi_binding(None)
         self._crossfader_bar.set_learning(False)
         self._crossfader_bar.set_midi_label(None)

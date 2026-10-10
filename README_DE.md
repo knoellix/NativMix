@@ -114,6 +114,12 @@ flatpak run net.knoellix.NativMix
 
 ## Update-Verlauf
 
+**v1.1.1**
+
+- Feat: A/B-Crossfader (Base×Gain, USB-Targets-Control, MIDI Learn auf der Bar) (#37)
+- UX: **+ App** → **Targets** (Apps + Hardware + USB-Crossfader-Control)
+- Fix: Labels via Profil-`save_current` (#38); MIDI Trailing-CC-Flush + Master-Echo-Unterdrückung (#39)
+
 **v1.1.0**
 
 - Meilenstein: Windows-WASAPI gilt als stabil — Other Apps, Soft-Apply, Appearance-Theme, Mute-Hotkey-Learn (#32)

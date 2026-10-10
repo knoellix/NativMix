@@ -22,7 +22,7 @@ import threading
 import time
 
 import setproctitle
-from PyQt6.QtCore import QObject, QSocketNotifier, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QSocketNotifier, QTimer, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QStyleFactory
@@ -631,15 +631,10 @@ def main() -> None:
     # MIDI volumes → audio backend
     midi.midi_volumes_changed.connect(backend.apply_midi_volumes)
 
-    # MIDI CC movements → visual feedback on sliders
-    def _on_midi_volumes_changed(mappings: list[tuple[int, float]]) -> None:
-        try:
-            for ch, vol in mappings:
-                window.on_channel_volume_changed(ch, vol)
-        except Exception:
-            logger.exception("_on_midi_volumes_changed: unhandled exception")
-
-    midi.midi_volumes_changed.connect(_on_midi_volumes_changed)
+    # MIDI CC movements → visual feedback on sliders (MainWindow @pyqtSlot so
+    # AutoConnection queues from MidiThread onto the GUI thread — a nested
+    # plain callable would run on the worker and touch widgets off-thread).
+    midi.midi_volumes_changed.connect(window.on_midi_volumes_changed)
     # MIDI CC Received → Learn handshake
     midi.midi_cc_received.connect(window.on_midi_cc_received)
 
@@ -779,6 +774,7 @@ def main() -> None:
             # profile's context; cancel it so a CC meant for the new profile
             # is never captured as a binding by mistake.
             window._crossfader_midi_learning = False
+            window._crossfader_learn_absorb_cc = False
             # Sync crossfader bar/checkbox/strip-freeze and re-apply gains for the
             # new profile's crossfader state (position/sides/enabled).
             window.refresh_crossfader_ui()
@@ -809,6 +805,15 @@ def main() -> None:
                 _push_midi_mute_feedback()
         except Exception:
             logger.exception("_switch_profile: error switching to %r", target)
+
+    class _ProfileSwitchBridge(QObject):
+        """Queue profile switches onto the GUI thread (IPC / MIDI workers)."""
+
+        @pyqtSlot(str)
+        def switch(self, target: str) -> None:
+            _switch_profile(target)
+
+    _profile_bridge = _ProfileSwitchBridge(window)
 
     def _update_profile_settings_ui(profile_id: str) -> None:
         try:
@@ -1035,9 +1040,11 @@ def main() -> None:
             logger.exception("_on_set_volume_requested: unhandled exception")
 
     ipc_server.set_volume_requested.connect(_on_set_volume_requested)
-    ipc_server.profile_switch_requested.connect(_switch_profile)
-    midi.profile_switch_requested.connect(_switch_profile)
-    window.profile_switch_requested.connect(_switch_profile)
+    # Bridge slots live on the GUI thread (parent=window) so AutoConnection
+    # queues emits from IPC / MidiThread instead of touching widgets off-thread.
+    ipc_server.profile_switch_requested.connect(_profile_bridge.switch)
+    midi.profile_switch_requested.connect(_profile_bridge.switch)
+    window.profile_switch_requested.connect(_profile_bridge.switch)
 
     def handle_list_sinks(socket):
         data = backend.get_v_sinks_debug()

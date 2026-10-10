@@ -943,14 +943,19 @@ class PipeWireManager(AudioBackendBase):
     # ------------------------------------------------------------------
 
     def _update_thread_states(self) -> None:
-        """Pushes current config/volumes to the Listener thread safely."""
+        """Pushes current config/volumes to the Listener thread safely.
+
+        ``vol`` is the *effective* (crossfader-adjusted) value the listener
+        must apply on reconnect / new streams. Base/GUI volumes stay in
+        ``_poti_volumes`` / config and are never overwritten here.
+        """
         if not self._thread:
             return
 
         with self._state_lock:
             states = {
                 ch: {
-                    "vol": self._poti_volumes.get(ch, 0.5),
+                    "vol": self._effective_for_channel(ch, self._poti_volumes.get(ch, 0.5)),
                     "muted": self._channel_muted.get(ch, False),
                     "v_sink": self._config.is_v_sink_enabled(ch),
                     "v_sink_busy": ch in self._vsink_creating,
@@ -1330,14 +1335,16 @@ class PipeWireManager(AudioBackendBase):
         # Clear cache so we rescan and pick up the new app assignment instantly
         invalidate_cache()
 
-        current_volume = self._poti_volumes.get(channel_index, 0.5)
+        base_volume = self._poti_volumes.get(channel_index, 0.5)
+        current_volume = self._effective_for_channel(channel_index, base_volume)
         with self._state_lock:
             current_muted = self._channel_muted.get(channel_index, False)
         logger.debug(
-            "Mapping changed: channel %d → %s (applying vol=%.2f muted=%s)",
+            "Mapping changed: channel %d → %s (applying eff=%.2f base=%.2f muted=%s)",
             channel_index,
             app_names,
             current_volume,
+            base_volume,
             current_muted,
         )
 
@@ -1682,18 +1689,18 @@ class PipeWireManager(AudioBackendBase):
                     self._poti_volumes[channel] = volume
                     creating = channel in self._vsink_creating
 
-                # Persist in-memory so the next startup seeds _poti_volumes
-                # with the last-known MIDI position (saved to disk on stop()).
-                self._config.set_channel_volume(channel, volume)
-
                 if creating:
                     continue
 
                 # The crossfader control channel's CC value drives the
                 # crossfader position (handled in main.py), not a mix
-                # volume — never forward it to hardware/apps/V-Sink.
+                # volume — never persist a fake base or forward to apps.
                 if self._is_crossfader_control_channel(channel):
                     continue
+
+                # Persist in-memory so the next startup seeds _poti_volumes
+                # with the last-known MIDI position (saved to disk on stop()).
+                self._config.set_channel_volume(channel, volume)
 
                 eff = self._effective_for_channel(channel, volume)
                 mode = self._config.get_channel_mode(channel)
@@ -1776,36 +1783,39 @@ class PipeWireManager(AudioBackendBase):
         Does not touch stored base volumes or emit channel_volume_changed —
         call this after a crossfader position/side/enabled change so the GUI
         faders stay put while the actual audio output gain updates.
+        Always refreshes listener thread states so reconnect applies the new
+        effective gains even when Pulse is temporarily unavailable.
         """
         shared_pulse = self._get_vol_pulse()
-        if shared_pulse is None:
-            return
-        try:
-            for channel in range(self._config.num_channels):
-                with self._state_lock:
-                    if channel in self._vsink_creating:
-                        continue
-                base = self._config.get_channel_volume(channel)
-                eff = self._effective_for_channel(channel, base)
-                mode = self._config.get_channel_mode(channel)
-                if mode == "hardware":
-                    hw_id = self._config.get_hardware_id(channel)
-                    if hw_id and self._should_apply_volume("hardware", hw_id, eff):
-                        self._apply_hardware_volume(hw_id, eff, pulse=shared_pulse)
-                else:
-                    if self._config.is_v_sink_enabled(channel):
-                        if self._should_apply_volume("vsink", str(channel), eff):
-                            self._set_v_sink_volume(channel, eff, pulse=shared_pulse)
-                        self._apply_ee_held_stream_volumes(channel, eff, pulse=shared_pulse)
+        if shared_pulse is not None:
+            try:
+                for channel in range(self._config.num_channels):
+                    with self._state_lock:
+                        if channel in self._vsink_creating:
+                            continue
+                    base = self._config.get_channel_volume(channel)
+                    eff = self._effective_for_channel(channel, base)
+                    mode = self._config.get_channel_mode(channel)
+                    if mode == "hardware":
+                        hw_id = self._config.get_hardware_id(channel)
+                        if hw_id and self._should_apply_volume("hardware", hw_id, eff):
+                            self._apply_hardware_volume(hw_id, eff, pulse=shared_pulse)
                     else:
-                        app_names = self._config.get_app_names(channel)
-                        for name in app_names:
-                            if self._should_apply_volume("app", name, eff):
-                                if name.lower() == "system master":
-                                    self._arm_master_write_suppress()
-                                self._apply_volume_by_name(name, eff, pulse=shared_pulse)
-        except pulsectl.PulseError as exc:
-            logger.error("reapply_all_channel_volumes: PulseAudio connection lost: %s", exc)
+                        if self._config.is_v_sink_enabled(channel):
+                            if self._should_apply_volume("vsink", str(channel), eff):
+                                self._set_v_sink_volume(channel, eff, pulse=shared_pulse)
+                            self._apply_ee_held_stream_volumes(channel, eff, pulse=shared_pulse)
+                        else:
+                            app_names = self._config.get_app_names(channel)
+                            for name in app_names:
+                                if self._should_apply_volume("app", name, eff):
+                                    if name.lower() == "system master":
+                                        self._arm_master_write_suppress()
+                                    self._apply_volume_by_name(name, eff, pulse=shared_pulse)
+            except pulsectl.PulseError as exc:
+                logger.error("reapply_all_channel_volumes: PulseAudio connection lost: %s", exc)
+        # Keep the listener's reconnect path in sync with the new effective gains.
+        self._update_thread_states()
 
     def _set_v_sink_volume(self, channel_index: int, volume: float, pulse: pulsectl.Pulse | None = None) -> None:
         """

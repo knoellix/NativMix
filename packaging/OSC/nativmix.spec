@@ -1,5 +1,5 @@
 Name:           nativmix
-Version:        1.1.0
+Version:        1.1.1
 Release:        0
 Summary:        Hardware-based PipeWire volume & MIDI mixer for Wayland/X11
 License:        GPL-3.0-or-later
@@ -145,6 +145,11 @@ fi
 %doc README.md
 
 %changelog
+* Sat Oct 10 2026 Christian Möllmann <moellix@knoellix.net> - 1.1.1-1
+- Feat: A/B crossfader (base×gain, USB control via Targets, MIDI Learn on bar) (#37)
+- UX: + App replaced by Targets (Apps, Hardware, USB crossfader control)
+- Fix: channel labels persist via profile save_current (#38)
+- Fix: MIDI trailing CC flush + System Master echo suppress (#39)
 * Sun Oct 04 2026 Christian Möllmann <moellix@knoellix.net> - 1.1.0-1
 - Milestone: Windows WASAPI considered stable (Other Apps, soft-apply, appearance, mute hotkeys)
 - Fix: SIGTERM/SIGINT (pkill, systemd stop) now quit reliably like tray Quit (#35)

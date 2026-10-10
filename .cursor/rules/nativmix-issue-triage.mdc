@@ -1,0 +1,38 @@
+---
+description: Standard triage for new bugs/issues — investigate, plan, reply, then implement
+alwaysApply: true
+---
+
+# NativMix Bug / Issue Triage
+
+When discussing a **new bug, GitHub issue, or user report**, follow this order. Do not jump straight to coding unless the user explicitly asks to implement now.
+
+## 1. Relevant code first
+
+- Locate the platform/backend path (e.g. PipeWire vs WASAPI, GUI vs worker).
+- Compare with the working equivalent if one exists (Linux vs Windows).
+- Summarize briefly for the maintainer: what runs, what is missing, why the report fits.
+
+## 2. Decide what to do
+
+- Agree scope: fix now vs next session, branch vs main, release impact.
+- Optional: write a short plan under `.cursor/plans/` for the next session.
+- Platform-only fixes (e.g. Windows WASAPI): prefer a **dedicated branch / test build** so Linux users are not flooded with releases while iterating; merge after reporter smoke-test when practical.
+
+## 3. Formulate the reply
+
+- Draft a paste-ready comment (usually English on GitHub) **before** implementing.
+- Acknowledge the report; state what you found in plain language (no deep code dump unless asked).
+- Say what you plan next; avoid promising a patch in the same comment if work is deferred.
+- Keep log/detail requests light unless the maintainer wants them.
+
+## 4. Then proceed as planned
+
+- Only after steps 1–3: implement, branch, tests, wiki/changelog — whatever was agreed.
+- Do not treat the reply draft as “done” for the codebase until the planned work is actually started or explicitly deferred with a plan note.
+
+## Anti-patterns
+
+- Fixing or committing before the maintainer has a reply draft and a clear plan.
+- Spamming main/release channels for exploratory platform fixes.
+- Asking the reporter for noise (logs, hardware path) when the code gap is already clear.

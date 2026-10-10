@@ -8,15 +8,11 @@ ConfigManager, so this widget stays free of business logic.
 
 from __future__ import annotations
 
-import logging
-
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QLabel, QMenu, QSlider, QVBoxLayout, QWidget
 
 from nativmix.gui.crossfader_layout import channel_eligible_for_side
 from nativmix.utils.qt_utils import _slot_guard
-
-logger = logging.getLogger(__name__)
 
 # Slider resolution: 0 = full A, _XF_RESOLUTION = full B. Mapped to 0.0–1.0.
 _XF_RESOLUTION = 1000
@@ -51,14 +47,17 @@ class CrossfaderBar(QWidget):
         self._ctx_menu: QMenu | None = None
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(8, 2, 8, 2)
-        outer.setSpacing(2)
+        # Tight to the V-Sink row above — only horizontal padding for A/B hit targets.
+        outer.setContentsMargins(4, 0, 4, 0)
+        outer.setSpacing(0)
 
         self._control_label = QLabel(_PLACEHOLDER_CONTROL_NAME)
         self._control_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         small_font = self._control_label.font()
         small_font.setPointSize(max(7, small_font.pointSize() - 1))
         self._control_label.setFont(small_font)
+        # Always visible (placeholder or name) so assigning a control channel
+        # does not nudge the A/B track downward.
         outer.addWidget(self._control_label)
 
         row = QHBoxLayout()
@@ -175,11 +174,12 @@ class CrossfaderBar(QWidget):
     def set_control_name(self, name: str) -> None:
         """Update the label shown above the slider.
 
-        Shows the placeholder `—` when *name* is empty (no USB/MIDI channel
-        currently assigned as the crossfader control).
+        Empty names keep the `—` placeholder so bar height stays stable when
+        a control channel is assigned or cleared.
         """
         text = (name or "").strip()
         self._control_label.setText(text if text else _PLACEHOLDER_CONTROL_NAME)
+        self._control_label.setVisible(True)
 
     def set_control_index(self, control_index: int | None) -> None:
         """Remember which channel index is the frozen crossfader control (if any).

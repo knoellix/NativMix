@@ -111,6 +111,26 @@ def test_set_crossfader_usb_channel_index_none_clears(qtbot, tmp_config_path, tm
     assert cfg.get_crossfader_usb_channel_index() is None
 
 
+def test_set_crossfader_usb_channel_index_rejects_midi_channel(qtbot, tmp_config_path, tmp_profiles_dir):
+    """MIDI strips learn via the bar — Targets USB control is USB indices only."""
+    cfg = _make_config(tmp_config_path, tmp_profiles_dir)
+    cfg.input_mode = "hybrid"
+    cfg.midi_channel_count = 2
+    midi_idx = cfg.hw_channel_count  # first MIDI channel
+    cfg.set_crossfader_usb_channel_index(0)
+    cfg.set_crossfader_usb_channel_index(midi_idx)
+    assert cfg.get_crossfader_usb_channel_index() == 0
+
+
+def test_set_crossfader_usb_channel_index_noop_in_midi_only(qtbot, tmp_config_path, tmp_profiles_dir):
+    cfg = _make_config(tmp_config_path, tmp_profiles_dir)
+    cfg.input_mode = "usb"
+    cfg.set_crossfader_usb_channel_index(1)
+    cfg.input_mode = "midi_only"
+    cfg.set_crossfader_usb_channel_index(0)
+    assert cfg.get_crossfader_usb_channel_index() == 1  # unchanged; clear happens in GUI refresh
+
+
 # ── crossfader MIDI binding ──────────────────────────────────────────────────
 
 

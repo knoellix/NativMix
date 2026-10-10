@@ -2,6 +2,15 @@
 
 All notable changes to NativMix are documented in this file.
 
+## v1.1.1
+
+- Feat (#37): A/B crossfader — base×gain (GUI base unchanged), bar under strips, A/B menus, USB control via Targets (`usb`/`hybrid`), MIDI Learn on the bar (`hybrid`/`midi_only` + Edit MIDI)
+- UX: per-strip **+ App** replaced by **Targets** — Apps list, Hardware submenu, and (in `usb`/`hybrid`) USB crossfader-control assign/clear; separate Device checkbox removed
+- Fix (#38): channel labels persist via `ProfileManager.save_current` (not only `config.save`, which strips channels)
+- Fix (#39): MIDI trailing CC flush after throttle; suppress System Master echo fights
+- UX: bar width/centering under strip group; dim control strip except Targets; clear USB control in `midi_only`; Learn absorb same-tick position
+- Fix: PipeWire reconnect/mapping apply effective volume; reapply pushes listener thread states; MIDI→GUI profile/volume updates on GUI thread
+
 ## v1.1.0
 
 - Milestone: Windows WASAPI backend considered stable for daily use (still not maintainer daily-driver)

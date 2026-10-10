@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from nativmix.audio.manager import PipeWireManager
 from nativmix.audio.wasapi_manager import WasapiManager
 from nativmix.utils.config_manager import ConfigManager
@@ -222,6 +224,7 @@ def test_pipewire_apply_midi_volumes_skips_usb_control_channel(tmp_path) -> None
     mgr._config.num_channels = 2
     mgr._config.set_crossfader_usb_channel_index(0)
     mgr._config.set_crossfader_enabled(True)
+    mgr._config.set_channel_volume(0, 0.42)
     ch = mgr._config._channel(0)
     ch["mode"] = "hardware"
     ch["hardware_id"] = "sink:stale_target"
@@ -233,8 +236,9 @@ def test_pipewire_apply_midi_volumes_skips_usb_control_channel(tmp_path) -> None
         mgr.apply_midi_volumes([(0, 0.9)])
 
     apply_hw.assert_not_called()
-    # Base is still persisted (needed for restart-seeding), just not applied.
-    assert mgr._config.get_channel_volume(0) == 0.9
+    # Control channel must not pollute stored base (GUI shows "XF", poti/CC
+    # drives the bar — restart seeding uses real mix channels only).
+    assert mgr._config.get_channel_volume(0) == 0.42
 
 
 def test_pipewire_apply_poti_volumes_still_applies_when_crossfader_disabled(tmp_path) -> None:
@@ -254,3 +258,63 @@ def test_pipewire_apply_poti_volumes_still_applies_when_crossfader_disabled(tmp_
         mgr.apply_poti_volumes([0.7])
 
     apply_hw.assert_called_once()
+
+
+def test_pipewire_update_thread_states_pushes_effective_volume(tmp_path) -> None:
+    """Listener reconnect must see crossfader-adjusted gain, not raw base."""
+    mgr = _pw_mgr(tmp_path)
+    mgr._config.set_cross_side(0, "a")
+    mgr._config.set_crossfader_enabled(True)
+    mgr._config.set_crossfader_position(1.0)  # side A fully faded
+    with mgr._state_lock:
+        mgr._poti_volumes[0] = 0.8
+
+    thread = MagicMock()
+    thread._states_lock = MagicMock()
+    thread._states_lock.__enter__ = MagicMock(return_value=None)
+    thread._states_lock.__exit__ = MagicMock(return_value=False)
+    thread.channel_states = {}
+    mgr._thread = thread
+
+    mgr._update_thread_states()
+
+    assert thread.channel_states[0]["vol"] == 0.0
+    assert mgr._poti_volumes[0] == 0.8
+
+
+def test_pipewire_reapply_updates_thread_states(tmp_path) -> None:
+    mgr = _pw_mgr(tmp_path)
+    with (
+        patch.object(mgr, "_get_vol_pulse", return_value=None),
+        patch.object(mgr, "_update_thread_states") as update_states,
+    ):
+        mgr.reapply_all_channel_volumes()
+    update_states.assert_called_once()
+
+
+def test_crossfader_learn_absorbs_same_tick_cc_position() -> None:
+    """Learn capture and position apply share midi_cc_received — absorb once."""
+    from nativmix.gui.main_window import MainWindow
+
+    class _Fake:
+        def __init__(self) -> None:
+            self._crossfader_midi_learning = False
+            self._crossfader_learn_absorb_cc = True
+            self._config = MagicMock()
+            self._config.get_crossfader_enabled.return_value = True
+            self._config.get_crossfader_midi_binding.return_value = (7, 0)
+            self.moved: list[float] = []
+
+        def is_crossfader_learning(self) -> bool:
+            return self._crossfader_midi_learning
+
+        def apply_crossfader_position_external(self, position: float) -> None:
+            self.moved.append(position)
+
+    fake = _Fake()
+    MainWindow.on_midi_cc_for_crossfader(fake, 0, 7, 64)
+    assert fake.moved == []
+    assert fake._crossfader_learn_absorb_cc is False
+    MainWindow.on_midi_cc_for_crossfader(fake, 0, 7, 64)
+    assert len(fake.moved) == 1
+    assert fake.moved[0] == pytest.approx(64 / 127.0)
