@@ -64,6 +64,7 @@ from PyQt6.QtWidgets import (
 )
 
 from nativmix.audio.easyeffects_hold import is_easyeffects_sink
+from nativmix.gui.crossfader_layout import crossfader_bar_width
 from nativmix.gui.settings_panel import SettingsPanel
 from nativmix.utils.paths import is_windows
 from nativmix.utils.proc_resolver import GENERIC_PA_NAMES
@@ -1390,6 +1391,11 @@ class ChannelWidget(QFrame):
         else:
             self._config.save()
             logger.warning("Channel rename: no ProfileManager on window; label may not persist")
+        # Keep the crossfader bar's control-name label and A/B menu entries
+        # in sync in case this is the control channel or a side-assigned one.
+        refresh = getattr(self.window(), "refresh_crossfader_ui", None)
+        if callable(refresh):
+            refresh()
 
     # ------------------------------------------------------------------
     # Inversion
@@ -1633,8 +1639,18 @@ class MainWindow(QMainWindow):
         self._crossfader_bar.position_changed.connect(self._on_crossfader_position_changed)
         self._crossfader_bar.midi_learn_requested.connect(self._on_crossfader_learn_requested)
         self._crossfader_bar.midi_clear_requested.connect(self._on_crossfader_clear_requested)
+        self._crossfader_bar.side_assignment_toggled.connect(self._on_crossfader_side_assignment_toggled)
         self._crossfader_bar.setVisible(False)
-        root.addWidget(self._crossfader_bar)
+
+        # Center the bar under the channel strips instead of stretching it
+        # full-width: wrap it in its own row with stretch on both sides.
+        self._crossfader_row = QWidget()
+        xf_row = QHBoxLayout(self._crossfader_row)
+        xf_row.setContentsMargins(0, 0, 0, 0)
+        xf_row.addStretch(1)
+        xf_row.addWidget(self._crossfader_bar)
+        xf_row.addStretch(1)
+        root.addWidget(self._crossfader_row)
 
         # ── Add MIDI Channel Button ──
         self._add_midi_btn = QPushButton("+ Add MIDI Channel")
@@ -1778,6 +1794,7 @@ class MainWindow(QMainWindow):
         finally:
             self._ch_layout.setEnabled(True)
             self._ch_layout.update()
+        self._update_crossfader_bar_width()
         if is_windows():
             self._rebuild_mute_hotkeys()
 
@@ -2277,7 +2294,7 @@ class MainWindow(QMainWindow):
                 sp = self._root_layout.spacing()
                 top_h = self._toggle_settings_btn.height()
                 ch_h = self._channels[0].sizeHint().height() if self._channels else 200
-                xf_h = self._crossfader_bar.sizeHint().height() if self._crossfader_bar.isVisible() else 0
+                xf_h = self._crossfader_row.sizeHint().height() if self._crossfader_bar.isVisible() else 0
                 h = m.top() + top_h + sp + ch_h + (sp + xf_h if xf_h else 0) + m.bottom()
                 logger.debug("Compact resize: top=%d ch=%d xf=%d → h=%d", top_h, ch_h, xf_h, h)
                 # setFixedHeight forces the resize even if the WM ignores resize()
@@ -2480,6 +2497,14 @@ class MainWindow(QMainWindow):
         for w in self._channels:
             if w.is_midi_channel:
                 w.set_edit_mode(checked)
+        # Gate the bar's own Learn/Clear menu to edit mode too. Do not rely
+        # solely on the bar re-emitting `midi_learn_requested` to cancel an
+        # in-progress Learn on edit-off — explicitly clear the flag here so
+        # MainWindow stays correct even if that re-emit toggles it wrong.
+        self._crossfader_bar.set_midi_edit_mode(checked)
+        if not checked:
+            self._crossfader_midi_learning = False
+            self._crossfader_bar.set_learning(False)
 
     # ------------------------------------------------------------------
     # Profile selector helpers
@@ -2512,9 +2537,47 @@ class MainWindow(QMainWindow):
         cc, midi_ch = self._config.get_crossfader_midi_binding()
         self._crossfader_bar.set_midi_label(cc, midi_ch)
         self._crossfader_bar.set_learning(self._crossfader_midi_learning)
+        control_idx = self._config.get_crossfader_usb_channel_index()
+        control_name = self._channel_display_name(control_idx) if control_idx is not None else ""
+        self._crossfader_bar.set_control_index(control_idx)
+        self._crossfader_bar.set_control_name(control_name)
+        self._crossfader_bar.set_side_menu_model(self._crossfader_side_menu_model())
+        self._update_crossfader_bar_width()
         self.settings_panel.set_crossfader_enabled(enabled)
         for w in self._channels:
             w.apply_crossfader_role()
+
+    def _channel_display_name(self, index: int) -> str:
+        """Mirror ChannelWidget's label fallback: custom label -> MIDI N / CH N."""
+        label = self._config.get_channel_label(index)
+        if label:
+            return label
+        for ch_dict in self._config.all_channels():
+            if int(ch_dict.get("index", -1)) == index:
+                is_midi = bool(ch_dict.get("is_midi", False))
+                return f"MIDI {index + 1}" if is_midi else f"CH {index + 1}"
+        return f"CH {index + 1}"
+
+    def _crossfader_side_menu_model(self) -> list[tuple[int, str, str]]:
+        """Build (index, display_name, cross_side) rows for the bar's A/B menus."""
+        return [
+            (idx, self._channel_display_name(idx), self._config.get_cross_side(idx))
+            for idx in self._config.get_channel_order()
+        ]
+
+    def _update_crossfader_bar_width(self) -> None:
+        """Keep the bar's width aligned with the channel strips it sits under.
+
+        Recomputed after channel rebuilds (count/width can change), on window
+        resize (strip width changes), and from `refresh_crossfader_ui()`.
+        """
+        if not hasattr(self, "_crossfader_bar"):
+            return
+        n = len(self._channels)
+        strip_w = self._channels[0].width() if self._channels else _CHANNEL_MIN_WIDTH
+        if strip_w <= 0:
+            strip_w = _CHANNEL_MIN_WIDTH
+        self._crossfader_bar.setFixedWidth(crossfader_bar_width(n, strip_w))
 
     def is_crossfader_learning(self) -> bool:
         """True while the bar is waiting to capture a MIDI CC (gates CC → position)."""
@@ -2560,6 +2623,14 @@ class MainWindow(QMainWindow):
     @_slot_guard
     def _on_cross_assignment_changed(self) -> None:
         """A channel changed its A/B side or USB-control assignment."""
+        self.persist_active_profile_channels()
+        self._backend.reapply_all_channel_volumes()
+        self.refresh_crossfader_ui()
+
+    @_slot_guard
+    def _on_crossfader_side_assignment_toggled(self, side: str, channel_index: int, checked: bool) -> None:
+        """A/B assignment toggled from the crossfader bar's own A/B menus."""
+        self._config.set_cross_side(channel_index, side if checked else "none")
         self.persist_active_profile_channels()
         self._backend.reapply_all_channel_volumes()
         self.refresh_crossfader_ui()
@@ -2874,6 +2945,7 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event) -> None:
         self._save_geometry()
+        self._update_crossfader_bar_width()
         super().resizeEvent(event)
 
     def showEvent(self, event) -> None:
