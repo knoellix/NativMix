@@ -259,6 +259,7 @@ class SettingsPanel(QGroupBox):
     delete_profile_requested = pyqtSignal(str)  # profile_id to delete
     save_profile_requested = pyqtSignal()  # save current channel state to active profile
     restore_fader_positions_changed = pyqtSignal(bool)  # toggled on/off
+    crossfader_enabled_changed = pyqtSignal(bool)  # "Enable A/B crossfader" toggled
 
     def __init__(self, config, connected_port: str | None = None, profile_manager=None, parent=None) -> None:
         from nativmix.metadata import __version__
@@ -520,6 +521,15 @@ class SettingsPanel(QGroupBox):
             self._auto_search_cb.setChecked(self._config.auto_search_device)
             self._auto_search_cb.toggled.connect(self._on_auto_search_toggled)
             bottom_layout.addWidget(self._auto_search_cb)
+
+            self._crossfader_cb = QCheckBox("Enable A/B crossfader")
+            self._crossfader_cb.setToolTip(
+                "Show the A/B crossfader bar, enable per-channel A/B grouping, and "
+                "allow a USB fader or MIDI CC to drive the crossfader position."
+            )
+            self._crossfader_cb.setChecked(self._config.get_crossfader_enabled())
+            self._crossfader_cb.toggled.connect(self._on_crossfader_enabled_toggled)
+            bottom_layout.addWidget(self._crossfader_cb)
 
             if is_windows():
                 appearance_row = QHBoxLayout()
@@ -987,6 +997,21 @@ class SettingsPanel(QGroupBox):
         self._config.show_invert_option = checked
         self._config.save()
         logger.debug("Show Invert Option toggled: %s", checked)
+
+    @pyqtSlot(bool)
+    def _on_crossfader_enabled_toggled(self, checked: bool) -> None:
+        # MainWindow owns the bar, re-apply, and profile persistence.
+        self.crossfader_enabled_changed.emit(checked)
+        logger.debug("Enable A/B crossfader toggled: %s", checked)
+
+    def set_crossfader_enabled(self, enabled: bool) -> None:
+        """Sync the checkbox from the active profile without re-emitting."""
+        cb = getattr(self, "_crossfader_cb", None)
+        if cb is None:
+            return
+        cb.blockSignals(True)
+        cb.setChecked(bool(enabled))
+        cb.blockSignals(False)
 
     @pyqtSlot(bool)
     def _on_auto_search_toggled(self, checked: bool) -> None:

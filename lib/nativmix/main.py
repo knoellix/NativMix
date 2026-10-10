@@ -622,6 +622,20 @@ def main() -> None:
     arduino.volumes_changed.connect(window.on_volumes_changed)
     backend.channel_volume_changed.connect(window.on_channel_volume_changed)
 
+    # USB poti on the crossfader control channel → crossfader position (not volume)
+    def _on_arduino_crossfader(volumes: list[float]) -> None:
+        try:
+            if not config.get_crossfader_enabled():
+                return
+            idx = config.get_crossfader_usb_channel_index()
+            if idx is None or idx < 0 or idx >= len(volumes):
+                return
+            window.apply_crossfader_position_external(volumes[idx])
+        except Exception:
+            logger.exception("_on_arduino_crossfader: unhandled exception")
+
+    arduino.volumes_changed.connect(_on_arduino_crossfader)
+
     # MIDI volumes → audio backend
     midi.midi_volumes_changed.connect(backend.apply_midi_volumes)
 
@@ -636,6 +650,20 @@ def main() -> None:
     midi.midi_volumes_changed.connect(_on_midi_volumes_changed)
     # MIDI CC Received → Learn handshake
     midi.midi_cc_received.connect(window.on_midi_cc_received)
+
+    # MIDI CC bound to the crossfader → position (gated while the bar is learning)
+    def _on_midi_cc_for_crossfader(midi_ch: int, cc: int, val: int) -> None:
+        try:
+            if window.is_crossfader_learning() or not config.get_crossfader_enabled():
+                return
+            bound_cc, bound_ch = config.get_crossfader_midi_binding()
+            if bound_cc is None or cc != bound_cc or midi_ch != bound_ch:
+                return
+            window.apply_crossfader_position_external(val / 127.0)
+        except Exception:
+            logger.exception("_on_midi_cc_for_crossfader: unhandled exception")
+
+    midi.midi_cc_received.connect(_on_midi_cc_for_crossfader)
     # MIDI mute CC → toggle mute on the mapped channel
     midi.midi_mute_toggled.connect(backend.toggle_mute)
 
@@ -763,6 +791,10 @@ def main() -> None:
             config.save()
             # Rebuild strips so channel_order and assignments match the new profile.
             window._rebuild_channels()
+            # Sync crossfader bar/checkbox/strip-freeze and re-apply gains for the
+            # new profile's crossfader state (position/sides/enabled).
+            window.refresh_crossfader_ui()
+            backend.reapply_all_channel_volumes()
             # Always clear any stale takeover from the previous profile first.
             # Without this, switching away from a restore-enabled profile leaves
             # old takeover keys in place, blocking all subsequent Arduino input.
