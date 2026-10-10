@@ -85,6 +85,25 @@ def test_set_crossfader_usb_channel_index_clears_apps_and_cross_side(qtbot, tmp_
     assert cfg.get_app_names(2) == []
 
 
+def test_set_crossfader_usb_channel_index_clears_hardware_and_vsink(qtbot, tmp_config_path, tmp_profiles_dir):
+    """A channel that was previously hardware/V-Sink must not keep receiving
+    volume once it becomes the crossfader USB control channel: its poti
+    value now drives the bar position, so stale hardware/V-Sink targets must
+    be cleared (apply-skip in the manager is the other half of this fix).
+    """
+    cfg = _make_config(tmp_config_path, tmp_profiles_dir)
+    cfg.set_channel_mode(3, "hardware")
+    cfg.set_hardware_id(3, "sink:alsa_output.pci-0000_00_1f.3.analog-stereo")
+    cfg.set_v_sink_enabled(4, True)
+
+    cfg.set_crossfader_usb_channel_index(3)
+    cfg.set_crossfader_usb_channel_index(4)  # reassign to the V-Sink channel
+
+    assert cfg.get_channel_mode(3) == "app"
+    assert cfg.get_hardware_id(3) is None
+    assert cfg.is_v_sink_enabled(4) is False
+
+
 def test_set_crossfader_usb_channel_index_none_clears(qtbot, tmp_config_path, tmp_profiles_dir):
     cfg = _make_config(tmp_config_path, tmp_profiles_dir)
     cfg.set_crossfader_usb_channel_index(1)

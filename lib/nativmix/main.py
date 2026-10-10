@@ -791,6 +791,10 @@ def main() -> None:
             config.save()
             # Rebuild strips so channel_order and assignments match the new profile.
             window._rebuild_channels()
+            # A pending crossfader-bar MIDI Learn belongs to the outgoing
+            # profile's context; cancel it so a CC meant for the new profile
+            # is never captured as a binding by mistake.
+            window._crossfader_midi_learning = False
             # Sync crossfader bar/checkbox/strip-freeze and re-apply gains for the
             # new profile's crossfader state (position/sides/enabled).
             window.refresh_crossfader_ui()

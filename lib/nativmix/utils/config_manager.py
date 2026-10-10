@@ -1476,9 +1476,13 @@ class ConfigManager(QObject):
     def set_crossfader_usb_channel_index(self, index: int | None) -> None:
         """Assign the USB control channel for the crossfader.
 
-        Forces the target channel's cross_side to 'none' and clears its app
-        assignments — a control channel cannot also be an A/B side or carry
-        regular app mappings.
+        Forces the target channel's cross_side to 'none', clears its app
+        assignments, and resets mode/hardware/V-Sink to plain 'app' — a
+        control channel cannot also be an A/B side, carry regular app
+        mappings, or keep driving a previously assigned hardware/V-Sink
+        target with its raw poti position (volume apply skips this channel
+        entirely once it is the control index; this clears stale state so
+        nothing is left listening for a volume that will never come).
         """
         normalized = int(index) if index is not None else None
         self._crossfader["crossfader_usb_channel_index"] = normalized
@@ -1487,6 +1491,13 @@ class ConfigManager(QObject):
             ch["cross_side"] = "none"
             if ch.get("app_names"):
                 ch["app_names"] = []
+            ch["mode"] = "app"
+            ch["hardware_id"] = None
+            ch["v_sink"] = False
+            vm = self._data.setdefault("settings", {}).setdefault("v_sink_map", [False] * self.num_channels)
+            while len(vm) <= normalized:
+                vm.append(False)
+            vm[normalized] = False
         self.settings_changed.emit()
 
     def get_crossfader_midi_binding(self) -> tuple[int | None, int]:

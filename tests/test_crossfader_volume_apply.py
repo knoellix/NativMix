@@ -182,3 +182,75 @@ def test_wasapi_reapply_all_channel_volumes_skips_muted_channel(tmp_path) -> Non
         mgr.reapply_all_channel_volumes()
 
     apply_by_name.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PipeWireManager.apply_poti_volumes / apply_midi_volumes: skip the USB
+# crossfader control channel entirely (its poti/CC value drives the bar
+# position via main.py, not a mix volume -- nothing should reach
+# hardware/apps/V-Sink for that index while it is the control channel).
+# ---------------------------------------------------------------------------
+
+
+def test_pipewire_apply_poti_volumes_skips_usb_control_channel(tmp_path) -> None:
+    mgr = _pw_mgr(tmp_path)
+    mgr._config.num_channels = 2
+    mgr._config.set_crossfader_usb_channel_index(0)
+    mgr._config.set_crossfader_enabled(True)
+    # Simulate stale hardware assignment that predates the control assignment
+    # (e.g. a profile saved by an older build) to prove the volume-apply path
+    # itself skips the channel, independent of config-level clearing.
+    ch = mgr._config._channel(0)
+    ch["mode"] = "hardware"
+    ch["hardware_id"] = "sink:stale_target"
+
+    with (
+        patch.object(mgr, "_get_vol_pulse", return_value=MagicMock()),
+        patch.object(mgr, "_apply_hardware_volume") as apply_hw,
+        patch.object(mgr, "_apply_volume_by_name") as apply_by_name,
+    ):
+        mgr.apply_poti_volumes([0.9, 0.5])
+
+    apply_hw.assert_not_called()
+    # Non-control channel (1) is unaffected by the skip.
+    assert mgr._poti_volumes[0] == 0.9
+    apply_by_name.assert_not_called()
+
+
+def test_pipewire_apply_midi_volumes_skips_usb_control_channel(tmp_path) -> None:
+    mgr = _pw_mgr(tmp_path)
+    mgr._config.num_channels = 2
+    mgr._config.set_crossfader_usb_channel_index(0)
+    mgr._config.set_crossfader_enabled(True)
+    ch = mgr._config._channel(0)
+    ch["mode"] = "hardware"
+    ch["hardware_id"] = "sink:stale_target"
+
+    with (
+        patch.object(mgr, "_get_vol_pulse", return_value=MagicMock()),
+        patch.object(mgr, "_apply_hardware_volume") as apply_hw,
+    ):
+        mgr.apply_midi_volumes([(0, 0.9)])
+
+    apply_hw.assert_not_called()
+    # Base is still persisted (needed for restart-seeding), just not applied.
+    assert mgr._config.get_channel_volume(0) == 0.9
+
+
+def test_pipewire_apply_poti_volumes_still_applies_when_crossfader_disabled(tmp_path) -> None:
+    """Skip only kicks in while the crossfader feature itself is enabled."""
+    mgr = _pw_mgr(tmp_path)
+    mgr._config.num_channels = 1
+    mgr._config.set_crossfader_usb_channel_index(0)
+    mgr._config.set_crossfader_enabled(False)
+    ch = mgr._config._channel(0)
+    ch["mode"] = "hardware"
+    ch["hardware_id"] = "sink:target"
+
+    with (
+        patch.object(mgr, "_get_vol_pulse", return_value=MagicMock()),
+        patch.object(mgr, "_apply_hardware_volume") as apply_hw,
+    ):
+        mgr.apply_poti_volumes([0.7])
+
+    apply_hw.assert_called_once()

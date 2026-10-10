@@ -2097,7 +2097,14 @@ class MainWindow(QMainWindow):
 
     def sync_sliders_from_config(self) -> None:
         """Refresh on-screen fader positions from persisted profile/config volumes."""
+        control_idx = self._config.get_crossfader_usb_channel_index() if self._config.get_crossfader_enabled() else None
         for i in range(self._config.num_channels):
+            # The USB crossfader control strip shows a frozen "XF" display
+            # owned by apply_crossfader_role() -- never overwrite it with the
+            # raw stored base volume here (that base is meaningless for this
+            # strip; the poti drives the crossfader position instead).
+            if i == control_idx:
+                continue
             widget = self._channel_widget(i)
             if widget is None:
                 continue
@@ -2482,9 +2489,19 @@ class MainWindow(QMainWindow):
         return self._crossfader_midi_learning
 
     def apply_crossfader_position_external(self, position: float) -> None:
-        """Set position from hardware (USB poti / MIDI CC) and re-apply gains."""
-        self._config.set_crossfader_position(position)
-        self._crossfader_bar.set_position(position)
+        """Set position from hardware (USB poti / MIDI CC) and re-apply gains.
+
+        Called on every Arduino tick / MIDI CC for the bound control, which can
+        fire far more often than the physical position actually changes (e.g.
+        a resting poti still reports the same ADC value each tick). Skip the
+        config write, bar repaint, PulseAudio reapply loop, and persist-timer
+        restart when the position is effectively unchanged.
+        """
+        clamped = max(0.0, min(1.0, float(position)))
+        if abs(clamped - self._config.get_crossfader_position()) < 0.001:
+            return
+        self._config.set_crossfader_position(clamped)
+        self._crossfader_bar.set_position(clamped)
         self._backend.reapply_all_channel_volumes()
         self._crossfader_persist_timer.start()
 
@@ -2840,6 +2857,11 @@ class MainWindow(QMainWindow):
         )
         super().showEvent(event)
         self.sync_sliders_from_config()
+        # Re-apply the frozen crossfader control-strip display (greyed "XF"
+        # fader) in case the channel widgets were rebuilt while the window
+        # was hidden (e.g. profile switch via tray/IPC) and never got their
+        # role applied.
+        self.refresh_crossfader_ui()
         # Dirty X11 trick for GNOME: Mutter's smart placement overrides the
         # position set by restoreGeometry(). Capture pos before the compositor
         # moves it and reapply after the placement round-trip (~80 ms).

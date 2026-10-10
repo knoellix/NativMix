@@ -374,6 +374,11 @@ class WasapiManager(AudioBackendBase):
                 if self._channel_muted.get(ch, False):
                     if abs(vol - self._muted_at_volume.get(ch, vol)) > 0.05:
                         self._do_toggle_mute(ch)
+                # The crossfader control channel's poti value drives the
+                # crossfader position (handled in main.py), not a mix
+                # volume — never forward it to a session/endpoint.
+                if self._is_crossfader_control_channel(ch):
+                    continue
                 self._apply_channel_volume(ch, vol)
 
     @pyqtSlot(list)
@@ -387,6 +392,11 @@ class WasapiManager(AudioBackendBase):
                 if self._channel_muted.get(ch, False):
                     if abs(vol - self._muted_at_volume.get(ch, vol)) > 0.05:
                         self._do_toggle_mute(ch)
+                # The crossfader control channel's CC value drives the
+                # crossfader position (handled in main.py), not a mix
+                # volume — never forward it to a session/endpoint.
+                if self._is_crossfader_control_channel(ch):
+                    continue
                 self._apply_channel_volume(ch, vol)
 
     def set_channel_volume(self, channel_index: int, volume: float) -> None:
@@ -710,6 +720,17 @@ class WasapiManager(AudioBackendBase):
             self._config.get_crossfader_position(),
             self._config.get_crossfader_enabled(),
         )
+
+    def _is_crossfader_control_channel(self, channel: int) -> bool:
+        """True if crossfader is enabled and *channel* is the USB control index.
+
+        The poti/MIDI value for that index drives the crossfader position
+        (see ``main.py``), not a mix volume — session/endpoint volume apply
+        must be skipped for it entirely.
+        """
+        if not self._config.get_crossfader_enabled():
+            return False
+        return self._config.get_crossfader_usb_channel_index() == channel
 
     def _apply_channel_volume(self, channel_index: int, volume: float) -> None:
         """Apply volume to all apps on a channel and emit the GUI signal.

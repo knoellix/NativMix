@@ -1157,6 +1157,17 @@ class PipeWireManager(AudioBackendBase):
             self._config.get_crossfader_enabled(),
         )
 
+    def _is_crossfader_control_channel(self, channel: int) -> bool:
+        """True if crossfader is enabled and *channel* is the USB control index.
+
+        The poti/MIDI value for that index drives the crossfader position
+        (see ``main.py``), not a mix volume — hardware/app/V-Sink volume
+        apply must be skipped for it entirely.
+        """
+        if not self._config.get_crossfader_enabled():
+            return False
+        return self._config.get_crossfader_usb_channel_index() == channel
+
     def _check_tools(self) -> dict[str, bool]:
         """Check availability of required system tools (pactl, pw-link)."""
         return {tool: shutil.which(tool) is not None for tool in ("pactl", "pw-link")}
@@ -1608,6 +1619,12 @@ class PipeWireManager(AudioBackendBase):
                 if creating:
                     continue
 
+                # The crossfader control channel's poti value drives the
+                # crossfader position (handled in main.py), not a mix
+                # volume — never forward it to hardware/apps/V-Sink.
+                if self._is_crossfader_control_channel(channel):
+                    continue
+
                 eff = self._effective_for_channel(channel, volume)
                 mode = self._config.get_channel_mode(channel)
                 if mode == "hardware":
@@ -1670,6 +1687,12 @@ class PipeWireManager(AudioBackendBase):
                 self._config.set_channel_volume(channel, volume)
 
                 if creating:
+                    continue
+
+                # The crossfader control channel's CC value drives the
+                # crossfader position (handled in main.py), not a mix
+                # volume — never forward it to hardware/apps/V-Sink.
+                if self._is_crossfader_control_channel(channel):
                     continue
 
                 eff = self._effective_for_channel(channel, volume)
