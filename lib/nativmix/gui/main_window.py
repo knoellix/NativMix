@@ -790,11 +790,6 @@ class ChannelWidget(QFrame):
         self.strip_drop.emit(self._ch, global_pos)
 
     @_slot_guard
-    def _set_cross_side(self, side: str) -> None:
-        self._config.set_cross_side(self._ch, side)
-        self.cross_assignment_changed.emit()
-
-    @_slot_guard
     def _set_as_crossfader_control(self) -> None:
         self._config.set_crossfader_usb_channel_index(self._ch)
         self.cross_assignment_changed.emit()
