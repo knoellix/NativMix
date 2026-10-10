@@ -111,15 +111,29 @@ jobs:
           $mb = [math]::Round($f.Length / 1MB, 1)
           Write-Host "Installer: $($f.Name)  ($mb MB)"
 
-      # ── Tag only: GitHub Release + asset upload ─────────────────────────────
-      - name: Create GitHub Release and upload installer
+      # ── Tag only: notes section + asset (no generate_release_notes) ─────────
+      - name: Upsert GitHub Release notes (Windows section)
+        if: steps.version.outputs.IS_RELEASE == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          TAG="v${VERSION}"
+          chmod +x .github/scripts/upsert_release_notes.sh
+          .github/scripts/upsert_release_notes.sh "$TAG" "$VERSION" windows
+
+      - name: Upload installer to GitHub Release
         if: steps.version.outputs.IS_RELEASE == 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ steps.version.outputs.VERSION }}
           name: "NativMix v${{ steps.version.outputs.VERSION }}"
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false
           files: packaging/win/output/NativMix-*-Setup.exe
 
       # ── Manual / branch: Actions artifact (does not touch releases) ─────────

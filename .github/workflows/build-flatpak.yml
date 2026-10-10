@@ -61,15 +61,29 @@ jobs:
           cache-key: flatpak-builder-${{ hashFiles('flatpak/**') }}
           upload-artifact: true
 
+      - name: Upsert GitHub Release notes (Flatpak section)
+        # Tag pushes and workflow_dispatch (metadata version) update notes;
+        # Changelog stays single via marked sections. Pure Python API (no gh CLI).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          TAG="${{ steps.version.outputs.TAG }}"
+          chmod +x .github/scripts/upsert_release_notes.sh
+          .github/scripts/upsert_release_notes.sh "$TAG" "$VERSION" flatpak
+
       - name: Attach bundle to GitHub Release
         # Tag pushes attach to that tag; manual runs attach to v<metadata version>
         # so a green workflow_dispatch can still fill a missing release asset.
+        # Does NOT regenerate release notes (AUR/Windows/Flatpak own sections).
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.TAG }}
           name: "NativMix v${{ steps.version.outputs.VERSION }}"
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false
           files: NativMix-${{ steps.version.outputs.VERSION }}.flatpak
           fail_on_unmatched_files: true
