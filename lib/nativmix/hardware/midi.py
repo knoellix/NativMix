@@ -15,6 +15,8 @@ import time
 import mido
 from PyQt6.QtCore import QThread, pyqtSignal, pyqtSlot
 
+from nativmix.hardware.midi_throttle import CcVolumeThrottler
+
 logger = logging.getLogger(__name__)
 
 # Ignore inbound mapped fader CC while within this band of the last outbound sync.
@@ -133,7 +135,9 @@ class MidiThread(QThread):
         self._mute_cc_map: dict[tuple[int, int], int] = {}
         self._map_lock = threading.RLock()
         self._last_values: dict[tuple[int, int], int] = {}
-        self._last_vol_emit: dict[tuple[int, int], float] = {}
+        # Coalesces CC volume bursts to 50 Hz per binding while guaranteeing
+        # the trailing value of a burst is flushed (see #39).
+        self._cc_throttler = CcVolumeThrottler(0.02)
         # Persistent virtual port – kept alive across USB ↔ hybrid mode
         # switches so ALSA clients see one stable "NativMix:Input" port.
         self._virtual_client = None
@@ -437,6 +441,7 @@ class MidiThread(QThread):
                             continue
 
                         self._process_pending_sync(None)
+                        self._flush_due_cc_volumes()
 
                         msg_data = self._virtual_client.get_message()
                         if msg_data:
@@ -505,6 +510,7 @@ class MidiThread(QThread):
                 break
             self._process_pending_sync(outport)
             self._process_pending_mute_feedback(outport)
+            self._flush_due_cc_volumes()
             msg = inport.receive(block=False)
             if msg is None:
                 time.sleep(0.05)
@@ -642,10 +648,10 @@ class MidiThread(QThread):
                 with self._feedback_lock:
                     self._feedback_takeover.pop(ch_idx, None)
             now = time.monotonic()
-            if now - self._last_vol_emit.get(key, 0.0) >= 0.02:
-                self._last_vol_emit[key] = now
-                vol = val / 127.0
-                self.midi_volumes_changed.emit([(ch_idx, vol)])
+            vol = val / 127.0
+            to_emit = self._cc_throttler.note(key, ch_idx, vol, now)
+            if to_emit:
+                self.midi_volumes_changed.emit(to_emit)
 
         # 3. Mute toggle (value == 127 only). Suppress echoes of our own outbound.
         if val == 127:
@@ -665,6 +671,16 @@ class MidiThread(QThread):
                 self.profile_switch_requested.emit("prev")
             elif cc in self._profile_direct_map:
                 self.profile_switch_requested.emit(self._profile_direct_map[cc])
+
+    def _flush_due_cc_volumes(self) -> None:
+        """Emit any throttled CC volume still pending once its window elapses.
+
+        Called every ~10-20 ms from the read loop so the trailing sample of
+        a fast fader sweep is never dropped (#39).
+        """
+        due = self._cc_throttler.flush_due(time.monotonic())
+        if due:
+            self.midi_volumes_changed.emit(due)
 
     def _sleep_checked(self, seconds: float) -> None:
         """Sleep while checking for thread stop request."""

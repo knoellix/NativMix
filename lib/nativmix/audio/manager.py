@@ -66,6 +66,12 @@ _SAFETY_VOLUME: float = 0.0  # fully muted until we know who this stream belongs
 # Shared timeout (seconds) for all pactl/subprocess calls in this module.
 _SUBPROCESS_TIMEOUT: int = 5
 
+# Suppress window (seconds) for System Master echo: when MIDI/USB/GUI writes
+# the master sink volume, SinkPollThread's next poll would otherwise read
+# that same change back and re-emit it as master_volume_changed, fighting
+# the controller that is actively moving the fader (#39).
+_MASTER_WRITE_SUPPRESS_S: float = 0.25
+
 
 @dataclass
 class _PendingStream:
@@ -767,6 +773,9 @@ class PipeWireManager(AudioBackendBase):
         # to prevent stray writes hitting the system sink instead of the V-Sink.
         self._vsink_creating: set[int] = set()
         self._last_other_apps: list[str] = []
+        # monotonic() deadline until which _on_master_volume_changed() ignores
+        # SinkPollThread echoes of a write we just made ourselves (#39).
+        self._master_write_suppress_until: float = 0.0
         # Sink poller: polls default sink volume/name from a dedicated thread
         # instead of doing blocking IPC inside the PipeWire event callback.
         self._sink_poll_thread = SinkPollThread()
@@ -1598,6 +1607,8 @@ class PipeWireManager(AudioBackendBase):
                         app_names = self._config.get_app_names(channel)
                         for name in app_names:
                             if self._should_apply_volume("app", name, volume):
+                                if name.lower() == "system master":
+                                    self._arm_master_write_suppress()
                                 self._apply_volume_by_name(name, volume, pulse=shared_pulse)
         except pulsectl.PulseError as exc:
             logger.error("apply_poti_volumes: PulseAudio connection lost: %s", exc)
@@ -1659,6 +1670,8 @@ class PipeWireManager(AudioBackendBase):
                         app_names = self._config.get_app_names(channel)
                         for name in app_names:
                             if self._should_apply_volume("app", name, volume):
+                                if name.lower() == "system master":
+                                    self._arm_master_write_suppress()
                                 self._apply_volume_by_name(name, volume, pulse=shared_pulse)
         except pulsectl.PulseError as exc:
             try:
@@ -1707,6 +1720,8 @@ class PipeWireManager(AudioBackendBase):
                 app_names = self._config.get_app_names(channel_index)
                 for name in app_names:
                     if self._should_apply_volume("app", name, volume):
+                        if name.lower() == "system master":
+                            self._arm_master_write_suppress()
                         self._apply_volume_by_name(name, volume)
 
         self._update_thread_states()
@@ -2026,11 +2041,25 @@ class PipeWireManager(AudioBackendBase):
         except pulsectl.PulseError as exc:
             logger.error("toggle_mute for channel %d failed: %s", channel_index, exc)
 
+    def _arm_master_write_suppress(self) -> None:
+        """Arm the echo-suppress window right before writing System Master.
+
+        Call this only when actually about to write a MIDI/USB/GUI-driven
+        volume to the master sink, so the next SinkPollThread tick does not
+        read that same write back and re-emit it as a (now stale)
+        master_volume_changed that fights the controller mid-move (#39).
+        """
+        self._master_write_suppress_until = time.monotonic() + _MASTER_WRITE_SUPPRESS_S
+
     def _on_master_volume_changed(self, volume: float, muted: bool) -> None:
         """
         Slot: Called when the System Master volume changes.
         Updates faders for any channel assigned to 'System Master'.
         """
+        if time.monotonic() < self._master_write_suppress_until:
+            # A MIDI/USB/GUI write to the master sink is still in flight —
+            # ignore this poll echo instead of fighting the controller.
+            return
         for ch in range(self._config.num_channels):
             if "system master" in [n.lower() for n in self._config.get_app_names(ch)]:
                 with self._state_lock:
