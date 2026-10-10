@@ -400,6 +400,28 @@ class WasapiManager(AudioBackendBase):
             self._apply_channel_volume(channel_index, volume)
         self.channel_volume_changed.emit(channel_index, volume)
 
+    def reapply_all_channel_volumes(self) -> None:
+        """Re-apply the effective (crossfader-adjusted) volume for every channel.
+
+        Does not touch stored base volumes or emit channel_volume_changed —
+        call this after a crossfader position/side/enabled change so GUI
+        faders stay put while the actual session/endpoint gain updates.
+        """
+        for channel in range(self._config.num_channels):
+            with self._state_lock:
+                if self._channel_muted.get(channel, False):
+                    continue
+            base = self._config.get_channel_volume(channel)
+            eff = self._effective_for_channel(channel, base)
+            mode = self._config.get_channel_mode(channel)
+            if mode == "hardware":
+                hw_id = self._config.get_hardware_id(channel) or ""
+                if "system master" in hw_id.lower():
+                    self._set_system_master_volume(eff)
+            else:
+                for app_name in self._config.get_app_names(channel):
+                    self._apply_volume_by_name(app_name, eff)
+
     def is_channel_muted(self, channel_index: int) -> bool:
         """Return True if the mixer channel is currently muted."""
         with self._state_lock:
@@ -419,8 +441,9 @@ class WasapiManager(AudioBackendBase):
         with self._state_lock:
             vol = self._poti_volumes.get(channel_index, 0.5)
             muted = self._channel_muted.get(channel_index, False)
+        eff = self._effective_for_channel(channel_index, vol)
         for app_name in app_names:
-            self._apply_volume_by_name(app_name, vol)
+            self._apply_volume_by_name(app_name, eff)
             self._apply_mute_by_name(app_name, muted)
         self._refresh_other_apps_list()
 
@@ -450,11 +473,12 @@ class WasapiManager(AudioBackendBase):
             with self._state_lock:
                 vol = self._poti_volumes.get(ch, 0.5)
                 muted = self._channel_muted.get(ch, False)
-            self._apply_volume_by_name(info.app_name, vol)
+            eff = self._effective_for_channel(ch, vol)
+            self._apply_volume_by_name(info.app_name, eff)
             self._apply_mute_by_name(info.app_name, muted)
             logger.debug(
                 "WASAPI soft-apply: vol=%.2f muted=%s to %s (ch=%d)",
-                vol,
+                eff,
                 muted,
                 info.app_name,
                 ch,
@@ -672,18 +696,39 @@ class WasapiManager(AudioBackendBase):
             self._apply_mute_by_name(app_name, new_muted)
         logger.debug("Channel %d muted=%s", channel_index, new_muted)
 
+    def _effective_for_channel(self, channel: int, base: float) -> float:
+        """Apply crossfader gain to *base* for *channel*; base stays the stored/GUI value."""
+        from nativmix.audio.crossfader import effective_volume
+
+        # The USB channel that physically drives the crossfader position has no
+        # apps assigned (it is control-only) — no gain to apply, nothing to mix.
+        if self._config.get_crossfader_usb_channel_index() == channel:
+            return base
+        return effective_volume(
+            base,
+            self._config.get_cross_side(channel),
+            self._config.get_crossfader_position(),
+            self._config.get_crossfader_enabled(),
+        )
+
     def _apply_channel_volume(self, channel_index: int, volume: float) -> None:
-        """Apply volume to all apps on a channel and emit the GUI signal."""
+        """Apply volume to all apps on a channel and emit the GUI signal.
+
+        *volume* is the base value; the crossfader gain is applied internally
+        so the GUI/base stays untouched (channel_volume_changed always carries
+        the base value the fader should show).
+        """
         if self._channel_muted.get(channel_index, False):
             return
+        eff = self._effective_for_channel(channel_index, volume)
         mode = self._config.get_channel_mode(channel_index)
         if mode == "hardware":
             hw_id = self._config.get_hardware_id(channel_index) or ""
             if "system master" in hw_id.lower():
-                self._set_system_master_volume(volume)
+                self._set_system_master_volume(eff)
         else:
             for app_name in self._config.get_app_names(channel_index):
-                self._apply_volume_by_name(app_name, volume)
+                self._apply_volume_by_name(app_name, eff)
         self.channel_volume_changed.emit(channel_index, volume)
 
     def _apply_volume_by_name(self, app_name: str, volume: float) -> None:
