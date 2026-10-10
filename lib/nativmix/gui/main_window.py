@@ -2173,6 +2173,38 @@ class MainWindow(QMainWindow):
                 )
                 break
 
+    @pyqtSlot(list)
+    @_slot_guard
+    def on_arduino_crossfader_volumes(self, volumes: list[float]) -> None:
+        """USB poti on the crossfader control channel -> crossfader position.
+
+        Runs on the GUI thread (AutoConnection from the Arduino worker
+        thread) because this touches GUI state and re-applies gains via
+        apply_crossfader_position_external().
+        """
+        if not self._config.get_crossfader_enabled():
+            return
+        idx = self._config.get_crossfader_usb_channel_index()
+        if idx is None or idx < 0 or idx >= len(volumes):
+            return
+        self.apply_crossfader_position_external(volumes[idx])
+
+    @pyqtSlot(int, int, int)
+    @_slot_guard
+    def on_midi_cc_for_crossfader(self, midi_channel: int, control_number: int, value: int) -> None:
+        """MIDI CC bound to the crossfader -> position (gated while the bar is learning).
+
+        Runs on the GUI thread (AutoConnection from the MIDI worker thread)
+        because this touches GUI state and re-applies gains via
+        apply_crossfader_position_external().
+        """
+        if self.is_crossfader_learning() or not self._config.get_crossfader_enabled():
+            return
+        bound_cc, bound_ch = self._config.get_crossfader_midi_binding()
+        if bound_cc is None or control_number != bound_cc or midi_channel != bound_ch:
+            return
+        self.apply_crossfader_position_external(value / 127.0)
+
     @pyqtSlot(int)
     @_slot_guard
     def on_channel_count_changed(self, n: int) -> None:

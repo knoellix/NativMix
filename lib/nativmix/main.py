@@ -622,19 +622,11 @@ def main() -> None:
     arduino.volumes_changed.connect(window.on_volumes_changed)
     backend.channel_volume_changed.connect(window.on_channel_volume_changed)
 
-    # USB poti on the crossfader control channel → crossfader position (not volume)
-    def _on_arduino_crossfader(volumes: list[float]) -> None:
-        try:
-            if not config.get_crossfader_enabled():
-                return
-            idx = config.get_crossfader_usb_channel_index()
-            if idx is None or idx < 0 or idx >= len(volumes):
-                return
-            window.apply_crossfader_position_external(volumes[idx])
-        except Exception:
-            logger.exception("_on_arduino_crossfader: unhandled exception")
-
-    arduino.volumes_changed.connect(_on_arduino_crossfader)
+    # USB poti on the crossfader control channel -> crossfader position (not volume)
+    # Connected directly to a MainWindow @pyqtSlot so Qt's AutoConnection
+    # queues the call to the GUI thread (worker thread must never touch GUI
+    # state or re-apply PipeWire volumes directly).
+    arduino.volumes_changed.connect(window.on_arduino_crossfader_volumes)
 
     # MIDI volumes → audio backend
     midi.midi_volumes_changed.connect(backend.apply_midi_volumes)
@@ -651,19 +643,11 @@ def main() -> None:
     # MIDI CC Received → Learn handshake
     midi.midi_cc_received.connect(window.on_midi_cc_received)
 
-    # MIDI CC bound to the crossfader → position (gated while the bar is learning)
-    def _on_midi_cc_for_crossfader(midi_ch: int, cc: int, val: int) -> None:
-        try:
-            if window.is_crossfader_learning() or not config.get_crossfader_enabled():
-                return
-            bound_cc, bound_ch = config.get_crossfader_midi_binding()
-            if bound_cc is None or cc != bound_cc or midi_ch != bound_ch:
-                return
-            window.apply_crossfader_position_external(val / 127.0)
-        except Exception:
-            logger.exception("_on_midi_cc_for_crossfader: unhandled exception")
-
-    midi.midi_cc_received.connect(_on_midi_cc_for_crossfader)
+    # MIDI CC bound to the crossfader -> position (gated while the bar is learning)
+    # Connected directly to a MainWindow @pyqtSlot so Qt's AutoConnection
+    # queues the call to the GUI thread (worker thread must never touch GUI
+    # state or re-apply PipeWire volumes directly).
+    midi.midi_cc_received.connect(window.on_midi_cc_for_crossfader)
     # MIDI mute CC → toggle mute on the mapped channel
     midi.midi_mute_toggled.connect(backend.toggle_mute)
 
