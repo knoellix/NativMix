@@ -2334,6 +2334,7 @@ class MainWindow(QMainWindow):
             self._profile_manager.save_current(
                 self._config.all_channels(),
                 self._config.get_channel_order(),
+                crossfader=self._config.get_crossfader_state(),
             )
 
     def _populate_profile_combo(self) -> None:

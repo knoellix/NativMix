@@ -131,6 +131,74 @@ def test_save_current_persists_channel_label(qtbot, tmp_profiles_dir):
     assert loaded["channels"][0]["label"] == "Kick"
 
 
+def test_save_current_merges_crossfader_kwarg(qtbot, tmp_profiles_dir):
+    """save_current() accepts optional crossfader=... without breaking old call sites."""
+    from nativmix.utils.profile_manager import ProfileManager, default_channels
+
+    pm = ProfileManager(profiles_dir=tmp_profiles_dir)
+    pid = pm.create("Crossfader Test", channel_count=2)
+    pm.switch(pid)
+    channels = default_channels(2)
+
+    # Old-style call (positional only) must still work.
+    pm.save_current(channels)
+    loaded = pm.load(pid)
+    assert loaded["crossfader_enabled"] is False
+
+    # New-style call with crossfader kwarg merges root fields.
+    pm.save_current(
+        channels,
+        crossfader={
+            "crossfader_enabled": True,
+            "crossfader_position": 0.25,
+            "crossfader_usb_channel_index": 0,
+            "crossfader_midi_cc": 20,
+            "crossfader_midi_channel": 2,
+        },
+    )
+    loaded = pm.load(pid)
+    assert loaded["crossfader_enabled"] is True
+    assert loaded["crossfader_position"] == 0.25
+    assert loaded["crossfader_usb_channel_index"] == 0
+    assert loaded["crossfader_midi_cc"] == 20
+    assert loaded["crossfader_midi_channel"] == 2
+
+
+# ── crossfader defaults ───────────────────────────────────────────────────────
+
+
+def test_default_channel_has_cross_side():
+    from nativmix.utils.profile_manager import default_channels
+
+    assert default_channels(1)[0]["cross_side"] == "none"
+
+
+def test_create_profile_has_crossfader_root_defaults(qtbot, tmp_profiles_dir):
+    pm = _make_manager(tmp_profiles_dir)
+    new_id = pm.create("Test", channel_count=3)
+    p = pm.load(new_id)
+    assert p["crossfader_enabled"] is False
+    assert p["crossfader_position"] == 0.5
+    assert p["crossfader_usb_channel_index"] is None
+    assert p["crossfader_midi_cc"] is None
+    assert p["crossfader_midi_channel"] == 0
+
+
+def test_load_defaults_crossfader_fields_for_old_profile(qtbot, tmp_profiles_dir):
+    """Profiles written before the crossfader feature load with safe defaults."""
+    old_profile = make_profile("profile-1", channel_count=2)
+    assert "crossfader_enabled" not in old_profile
+    assert "cross_side" not in old_profile["channels"][0]
+    write_profile(tmp_profiles_dir, old_profile)
+
+    pm = _make_manager(tmp_profiles_dir)
+    loaded = pm.load("profile-1")
+    assert loaded["crossfader_enabled"] is False
+    assert loaded["crossfader_position"] == 0.5
+    assert loaded["crossfader_usb_channel_index"] is None
+    assert loaded["channels"][0]["cross_side"] == "none"
+
+
 # ── switch ────────────────────────────────────────────────────────────────────
 
 

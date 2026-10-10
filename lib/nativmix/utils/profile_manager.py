@@ -41,9 +41,21 @@ def default_channels(count: int) -> list[dict[str, Any]]:
             "hardware_id": None,
             "volume": 1.0,
             "routing_paused_apps": [],
+            "cross_side": "none",  # "none" | "a" | "b" — crossfader assignment
         }
         for i in range(count)
     ]
+
+
+def default_crossfader_root() -> dict[str, Any]:
+    """Return default profile-root crossfader fields (next to 'channels')."""
+    return {
+        "crossfader_enabled": False,
+        "crossfader_position": 0.5,
+        "crossfader_usb_channel_index": None,
+        "crossfader_midi_cc": None,
+        "crossfader_midi_channel": 0,
+    }
 
 
 class ProfileManager(QObject):
@@ -115,11 +127,22 @@ class ProfileManager(QObject):
         return profiles
 
     def load(self, profile_id: str) -> dict:
-        """Load a profile dict from disk without activating it."""
+        """Load a profile dict from disk without activating it.
+
+        Missing crossfader fields (root-level and per-channel ``cross_side``)
+        are defaulted in-memory so older profiles stay readable without a
+        file migration. Defaults are NOT written back until the profile is
+        saved again (e.g. via save_current()).
+        """
         path = self._dir / f"{profile_id}.json"
         if not path.exists():
             raise FileNotFoundError(f"Profile not found: {profile_id}")
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for key, value in default_crossfader_root().items():
+            data.setdefault(key, value)
+        for ch in data.get("channels", []):
+            ch.setdefault("cross_side", "none")
+        return data
 
     def _save_profile(self, profile: dict) -> None:
         path = self._dir / f"{profile['id']}.json"
@@ -181,6 +204,7 @@ class ProfileManager(QObject):
             "midi_switch_cc": None,
             "channels": chans,
             "channel_order": order,
+            **default_crossfader_root(),
         }
         self._save_profile(profile)
         self._rebuild_direct_cc_map()
@@ -213,8 +237,19 @@ class ProfileManager(QObject):
         self,
         channels: list[dict],
         channel_order: list[int] | None = None,
+        *,
+        crossfader: dict[str, Any] | None = None,
     ) -> None:
-        """Persist the current channel state back to the active profile file."""
+        """Persist the current channel state back to the active profile file.
+
+        Args:
+            channels:      Full channel dict list (including ``cross_side``).
+            channel_order: Optional GUI strip order.
+            crossfader:    Optional profile-root crossfader fields (e.g. from
+                           ``ConfigManager.get_crossfader_state()``) merged
+                           into the profile. Existing callers keep working
+                           unchanged since this is keyword-only and optional.
+        """
         if not self._active_profile_id:
             return
         profile = self.load(self._active_profile_id)
@@ -223,6 +258,8 @@ class ProfileManager(QObject):
             profile["channel_order"] = list(channel_order)
         elif "channel_order" not in profile:
             profile["channel_order"] = list(range(len(channels)))
+        if crossfader is not None:
+            profile.update(crossfader)
         self._save_profile(profile)
         logger.debug("Profile saved: %s", self._active_profile_id)
 
