@@ -31,10 +31,11 @@ def test_extract_and_classify_current_changelog(rn) -> None:
     bullets = rn.extract_changelog_bullets("1.1.1")
     assert any("crossfader" in b.lower() for b in bullets)
     classified = rn.classify(bullets)
-    # v1.1.1 has no Windows/Flatpak-tagged lines — all linux/general
-    assert classified["linux"]
+    # Cross-platform bullets stay Changelog-only; PipeWire line → Linux.
+    assert any("pipewire" in b.lower() for b in classified["linux"])
     assert classified["windows"] == []
     assert classified["flatpak"] == []
+    assert not any("crossfader" in b.lower() for b in classified["linux"])
 
 
 def test_classify_windows_and_flatpak_lines(rn) -> None:
@@ -42,6 +43,7 @@ def test_classify_windows_and_flatpak_lines(rn) -> None:
         "- Feat (Windows): mute hotkey",
         "- Flatpak: portal autostart",
         "- Fix: general pipewire bug",
+        "- Feat: cross-platform UI tweak",
     ]
     c = rn.classify(bullets)
     assert c["windows"] == ["- Feat (Windows): mute hotkey"]
@@ -83,3 +85,18 @@ def test_merge_replaces_channel_section_idempotent(rn) -> None:
     assert once.count(rn.MARKER["aur"]) == 1
     assert twice.count(rn.MARKER["aur"]) == 1
     assert twice.count(rn.MARKER["changelog"]) == 1
+
+
+def test_channel_sections_have_notes_only_no_install_howto(rn) -> None:
+    """Install instructions belong in the README, not release channel sections."""
+    body = rn.upsert("", "1.1.1", "aur")
+    body = rn.upsert(body, "1.1.1", "windows")
+    body = rn.upsert(body, "1.1.1", "flatpak")
+    lowered = body.lower()
+    assert "paru" not in lowered
+    assert "yay" not in lowered
+    assert "flatpak install" not in lowered
+    assert "setup.exe" not in lowered
+    assert "## linux" in lowered
+    assert "## windows" in lowered
+    assert "## flatpak" in lowered

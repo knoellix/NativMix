@@ -30,6 +30,8 @@ MARKER = {
 
 WIN_RE = re.compile(r"(?i)\b(windows|wasapi|win32|inno)\b")
 FLATPAK_RE = re.compile(r"(?i)\bflatpak\b")
+# Native Linux packaging / PipeWire stack — not every generic feature.
+LINUX_RE = re.compile(r"(?i)\b(linux|pipewire|pulse(?:audio)?|arduino|aur|obs|wayland|hyprland)\b")
 
 
 def _version_heading(version: str) -> str:
@@ -57,21 +59,22 @@ def extract_changelog_bullets(version: str) -> list[str]:
 
 
 def classify(bullets: list[str]) -> dict[str, list[str]]:
+    """Split bullets into area lists. Cross-platform lines stay Changelog-only."""
     linux: list[str] = []
     windows: list[str] = []
     flatpak: list[str] = []
     for b in bullets:
         is_win = bool(WIN_RE.search(b))
         is_fp = bool(FLATPAK_RE.search(b))
-        if is_win and not is_fp:
+        is_linux = bool(LINUX_RE.search(b))
+        if is_win:
             windows.append(b)
-        elif is_fp and not is_win:
+        if is_fp:
             flatpak.append(b)
-        elif is_win and is_fp:
-            windows.append(b)
-            flatpak.append(b)
-        else:
+        if is_linux and not is_win and not is_fp:
             linux.append(b)
+        # Generic / cross-platform bullets are intentionally omitted from the
+        # area sections so the Changelog is not repeated under Linux/Windows/Flatpak.
     return {"linux": linux, "windows": windows, "flatpak": flatpak}
 
 
@@ -93,62 +96,30 @@ def section_changelog(version: str, bullets: list[str]) -> str:
 
 
 def section_aur(version: str, classified: dict[str, list[str]]) -> str:
-    v = version.lstrip("v")
+    del version  # install hints live in the README, not the release body
     linux = _bullets_or_fallback(
         classified["linux"],
-        "_No Linux-only bullets tagged in this release; see Changelog above._",
+        "_No Linux-specific notes beyond the Changelog above._",
     )
-    return (
-        f"{MARKER['aur']}\n"
-        f"## Arch Linux (AUR)\n\n"
-        f"```bash\n"
-        f"paru -S nativmix\n"
-        f"# or: yay -S nativmix\n"
-        f"```\n\n"
-        f"Package version tracks tag `v{v}`. After sync:\n\n"
-        f"```bash\n"
-        f"paru -Syu nativmix\n"
-        f"```\n\n"
-        f"### Linux highlights\n\n"
-        f"{linux}\n"
-    )
+    return f"{MARKER['aur']}\n## Linux\n\n{linux}\n"
 
 
 def section_windows(version: str, classified: dict[str, list[str]]) -> str:
-    v = version.lstrip("v")
+    del version
     win = _bullets_or_fallback(
         classified["windows"],
-        "_No Windows-specific bullets in this release; "
-        "general fixes in Changelog still apply on WASAPI where relevant._",
+        "_No Windows-specific notes in this release; see Changelog above._",
     )
-    return (
-        f"{MARKER['windows']}\n"
-        f"## Windows\n\n"
-        f"Download **`NativMix-{v}-Setup.exe`** from the assets below "
-        f"(per-user install; optional system-wide).\n\n"
-        f"### Windows notes\n\n"
-        f"{win}\n"
-    )
+    return f"{MARKER['windows']}\n## Windows\n\n{win}\n"
 
 
 def section_flatpak(version: str, classified: dict[str, list[str]]) -> str:
-    v = version.lstrip("v")
+    del version
     fp = _bullets_or_fallback(
         classified["flatpak"],
-        "_No Flatpak-specific bullets in this release; use the bundle below as a portable Linux fallback._",
+        "_No Flatpak-specific notes in this release; see Changelog above._",
     )
-    return (
-        f"{MARKER['flatpak']}\n"
-        f"## Flatpak\n\n"
-        f"Single-file bundle (not a Flathub remote — no `flatpak update` from GitHub):\n\n"
-        f"```bash\n"
-        f"flatpak install --user ./NativMix-{v}.flatpak\n"
-        f"flatpak run net.knoellix.NativMix\n"
-        f"```\n\n"
-        f"See [packaging/FLATPAK.md](https://github.com/knoellix/NativMix/blob/v{v}/packaging/FLATPAK.md).\n\n"
-        f"### Flatpak notes\n\n"
-        f"{fp}\n"
-    )
+    return f"{MARKER['flatpak']}\n## Flatpak\n\n{fp}\n"
 
 
 SECTION_BUILDERS = {
